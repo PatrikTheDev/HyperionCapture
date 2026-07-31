@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/hyperion-client"]
+members = ["crates/hyperion-client", "crates/kms-egl"]
 resolver = "3"
 
 [workspace.package]
@@ -35,11 +35,17 @@ repository.workspace = true
 [dependencies]
 clap.workspace = true
 hyperion-client = { path = "crates/hyperion-client" }
+drm-fourcc = "2.2"
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+caps = "0.5"
+drm = "0.15"
+kms-egl = { path = "crates/kms-egl" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

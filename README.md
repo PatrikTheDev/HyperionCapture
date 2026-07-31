@@ -7,11 +7,6 @@ compositor-independent mechanism used by Sunshine. That makes the eventual
 backend suitable for Gamescope and avoids coupling the server to X11, GNOME,
 KDE, or a particular Wayland compositor.
 
-> [!IMPORTANT]
-> This repository is a bootstrap. The executable, pipeline, test-pattern source,
-> and Hyperion API client work; DRM framebuffer/DMA-BUF capture is deliberately
-> isolated but is the next implementation milestone.
-
 ## Workspace
 
 - `hyperion-capture`: the executable, capture backends, pacing, and lifecycle.
@@ -63,6 +58,17 @@ Hyperion's FlatBuffers protocol does not carry API bearer tokens. Access to its
 TCP port should therefore be restricted to trusted networks. Run
 `cargo run -- --help` for the complete option list.
 
+On Linux, direct KMS capture defaults to the first active output on
+`/dev/dri/card0`. Select another stable connector name when needed:
+
+```sh
+cargo run --release -- \
+  --capture kms \
+  --drm-device /dev/dri/card1 \
+  --drm-connector DP-1 \
+  --hyperion-url http://hyperion.local:8090/
+```
+
 ## Local Hyperion deployment
 
 The repository includes a Docker Compose deployment built directly from
@@ -84,22 +90,59 @@ or `just hyperion-reset` to also erase that test configuration.
 This environment validates the API side of the pipeline; it does not emulate a
 DRM device and therefore cannot validate KMS capture.
 
-## Linux capture plan
+## Linux DRM/KMS capture
 
-The `capture::KmsCapture` module is the integration point for the direct KMS
-path. It should:
+`capture::KmsCapture` follows Sunshine's compositor-independent path. It
+enumerates connected DRM connectors and their CRTCs, selects the active primary
+plane, reads the current framebuffer metadata with `GETFB2` (and the legacy
+`GETFB` fallback), exports its GEM planes as DMA-BUFs, and imports them as EGL
+images through a GBM-backed display. OpenGL performs modifier-aware GPU
+readback and normalizes the framebuffer to packed RGB8 at the Hyperion boundary.
 
-1. Enumerate DRM cards, connectors, CRTCs, and active planes.
-2. Select an output by connector name rather than desktop-environment APIs.
-3. Import the active framebuffer's DMA-BUF planes through GBM/EGL.
-4. Convert or map the image into packed RGB while respecting modifiers,
-   rotation, pitch, and multi-plane formats.
-5. Re-enumerate after modesets so Gamescope and display changes are handled.
+All connector, encoder, CRTC, plane, and framebuffer IDs are rediscovered for
+each frame. DRM IDs can change during a modeset, so this is what allows a
+long-running process to follow compositor replacement such as SteamOS Game
+Mode switching to or from KDE Plasma. There is no X11, portal, or
+compositor-specific fallback.
 
-Like Sunshine's KMS service, production access must be granted narrowly. Prefer
-a hardened systemd service with access to the selected `/dev/dri/card*` device;
-do not run the process as root. The exact capability and device policy will be
-added alongside the backend, once its system calls are known.
+Reading framebuffer GEM handles requires `CAP_SYS_ADMIN` on current kernels.
+The backend drops it from the effective set after initialization, raises it
+only around `GETFB2`/`GETFB`, and drops it immediately afterwards. Grant the
+capability through a hardened systemd unit's permitted/bounding set and limit
+device access to the selected `/dev/dri/card*`; do not run the service as root.
+Never expose a capability-bearing development binary from a writable build
+directory as a production service.
+
+Unsafe GBM/EGL/OpenGL FFI is isolated in the `kms-egl` crate, whose safe API
+owns the duplicated DRM descriptor, validates plane metadata, checks allocation
+sizes, and keeps EGL/GL state thread-affine. The main capture crate remains
+`unsafe_code = "forbid"`. Drivers must expose EGL DMA-BUF import and, for tiled
+scanout, the modifier extension; otherwise capture returns an explicit error.
+Validate the target AMD/Intel hardware, including its actual modifiers and any
+HDR mode, before deployment.
+
+## Tart Linux testing
+
+An Ubuntu 24.04 ARM64 Tart image exercises Linux compilation, virtual KMS
+enumeration, permissions, active-plane capture, and re-enumeration around a
+direct-KMS Weston session:
+
+```sh
+just tart-vm-build  # first run downloads and configures the large base image
+just tart-vm-up     # terminal 1; stays open and owns the VM
+
+# In terminal 2. Run provision once after creating a new image.
+just tart-vm-provision
+just tart-vm-test
+just tart-vm-down
+```
+
+The checkout is mounted read-only and guest build artifacts stay on the VM.
+Tart's virtual GPU is useful for KMS integration but cannot reproduce physical
+AMD/Intel modifiers, GPU passthrough, or the real Gamescope↔Plasma handoff.
+Those remain native SteamOS acceptance tests. The complete tiered strategy,
+optional modeset fixture, image lifecycle, and future OCI push handoff are in
+[`vm/tart/TESTING.md`](vm/tart/TESTING.md).
 
 ## Hyperion setup
 

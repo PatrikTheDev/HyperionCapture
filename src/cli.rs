@@ -54,6 +54,10 @@ pub struct Cli {
     #[arg(long, default_value = "/dev/dri/card0")]
     pub drm_device: String,
 
+    /// DRM connector to capture, such as DP-1; defaults to the first active output.
+    #[arg(long)]
+    pub drm_connector: Option<String>,
+
     /// Test-pattern width; only used with `--capture test-pattern`.
     #[arg(long, default_value = "320", value_parser = clap::value_parser!(u32).range(1..))]
     pub width: u32,

@@ -66,7 +66,10 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut source: Box<dyn CaptureSource> = match cli.capture {
-        CaptureMethod::Kms => Box::new(KmsCapture::open(cli.drm_device)?),
+        CaptureMethod::Kms => Box::new(match cli.drm_connector.as_deref() {
+            Some(connector) => KmsCapture::open_connector(cli.drm_device, Some(connector))?,
+            None => KmsCapture::open(cli.drm_device)?,
+        }),
         CaptureMethod::TestPattern => Box::new(TestPatternCapture::new(cli.width, cli.height)),
     };
 
@@ -84,7 +87,17 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
             _ = ticker.tick() => {
-                let frame = source.capture()?;
+                let frame = match source.capture() {
+                    Ok(frame) => frame,
+                    Err(error) => {
+                        // KMS briefly has no active plane while one compositor
+                        // releases the display and the next modesets it. Retry
+                        // after the next tick so session switching cannot tear
+                        // down the long-running service.
+                        warn!(%error, "failed to capture frame; will re-enumerate and retry");
+                        continue;
+                    }
+                };
                 if let Err(error) = publisher
                     .send_rgb8(frame.width(), frame.height(), frame.pixels(), duration_ms)
                     .await

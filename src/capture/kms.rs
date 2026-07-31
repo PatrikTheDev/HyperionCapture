@@ -4,43 +4,459 @@ use super::{CaptureError, CaptureSource, Frame};
 
 /// Direct DRM/KMS capture backend.
 ///
-/// This type establishes the compositor-independent boundary used by Sunshine.
-/// Importing DRM framebuffers and converting DMA-BUF content to RGB is the next
-/// implementation milestone; keeping it here prevents desktop-specific capture
-/// details from leaking into the server pipeline.
+/// The Linux implementation follows Sunshine's KMS path: it selects an active
+/// connector and primary plane, exports the plane's current framebuffer as a
+/// DMA-BUF, imports it into EGL, and reads the resulting OpenGL texture back as
+/// RGB. Resources are deliberately enumerated for every frame so a compositor
+/// modeset or replacement (including a switch between Gamescope and a desktop
+/// session) does not leave stale object IDs in the capture process.
 #[derive(Debug)]
 pub struct KmsCapture {
     device: PathBuf,
+    #[cfg(target_os = "linux")]
+    connector: Option<String>,
+    #[cfg(target_os = "linux")]
+    backend: linux::LinuxKmsCapture,
 }
 
 impl KmsCapture {
+    /// Opens the first active connector on a DRM card.
     pub fn open(device: impl Into<PathBuf>) -> Result<Self, CaptureError> {
+        Self::open_connector(device, None)
+    }
+
+    /// Opens a DRM card and optionally selects a connector such as `DP-1`.
+    pub fn open_connector(
+        device: impl Into<PathBuf>,
+        connector: Option<&str>,
+    ) -> Result<Self, CaptureError> {
         let device = device.into();
 
         #[cfg(not(target_os = "linux"))]
-        return Err(CaptureError::Unavailable(format!(
-            "DRM/KMS capture only runs on Linux (requested {})",
-            device.display()
-        )));
+        {
+            let _ = connector;
+            Err(CaptureError::Unavailable(format!(
+                "DRM/KMS capture only runs on Linux (requested {})",
+                device.display()
+            )))
+        }
 
         #[cfg(target_os = "linux")]
         {
-            if !device.exists() {
-                return Err(CaptureError::Unavailable(format!(
-                    "DRM device {} does not exist",
-                    device.display()
-                )));
-            }
-            Ok(Self { device })
+            let backend = linux::LinuxKmsCapture::open(&device)?;
+            Ok(Self {
+                device,
+                connector: connector.map(str::to_owned),
+                backend,
+            })
         }
     }
 }
 
 impl CaptureSource for KmsCapture {
     fn capture(&mut self) -> Result<Frame, CaptureError> {
-        Err(CaptureError::Unavailable(format!(
-            "DRM framebuffer import for {} is not implemented yet; use --capture test-pattern to exercise the Hyperion pipeline",
+        #[cfg(not(target_os = "linux"))]
+        return Err(CaptureError::Unavailable(format!(
+            "DRM/KMS capture only runs on Linux (requested {})",
             self.device.display()
-        )))
+        )));
+
+        #[cfg(target_os = "linux")]
+        self.backend
+            .capture(self.connector.as_deref())
+            .map_err(|error| {
+                CaptureError::Unavailable(format!("{}: {error}", self.device.display()))
+            })
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod linux {
+    use std::{
+        fs::{File, OpenOptions},
+        os::fd::{AsFd, BorrowedFd, OwnedFd},
+        path::Path,
+    };
+
+    use drm::{
+        ClientCapability, Device as BasicDevice, buffer,
+        control::{Device as ControlDevice, PlaneType, connector, crtc, framebuffer, plane},
+    };
+    use drm_fourcc::{DrmFourcc, DrmModifier};
+    use kms_egl::{DmaBufFrame, DmaBufPlane, Reader as EglReader};
+
+    use super::{CaptureError, Frame};
+
+    #[derive(Debug)]
+    struct Card(File);
+
+    impl AsFd for Card {
+        fn as_fd(&self) -> BorrowedFd<'_> {
+            self.0.as_fd()
+        }
+    }
+
+    impl BasicDevice for Card {}
+    impl ControlDevice for Card {}
+
+    impl Card {
+        fn try_clone(&self) -> std::io::Result<Self> {
+            self.0.try_clone().map(Self)
+        }
+    }
+
+    struct EffectiveAdmin;
+
+    impl EffectiveAdmin {
+        fn raise() -> Result<Self, String> {
+            caps::raise(
+                None,
+                caps::CapSet::Effective,
+                caps::Capability::CAP_SYS_ADMIN,
+            )
+            .map_err(|error| {
+                format!(
+                    "cannot enable CAP_SYS_ADMIN to inspect the active framebuffer: {error}; grant it in the permitted capability set"
+                )
+            })?;
+            Ok(Self)
+        }
+    }
+
+    impl Drop for EffectiveAdmin {
+        fn drop(&mut self) {
+            let _ = caps::drop(
+                None,
+                caps::CapSet::Effective,
+                caps::Capability::CAP_SYS_ADMIN,
+            );
+        }
+    }
+
+    #[derive(Debug)]
+    pub(super) struct LinuxKmsCapture {
+        card: Card,
+        egl: EglReader,
+    }
+
+    #[derive(Debug)]
+    struct ActiveFramebuffer {
+        connector: String,
+        handle: framebuffer::Handle,
+    }
+
+    #[derive(Debug)]
+    struct FramebufferDescriptor {
+        size: (u32, u32),
+        format: DrmFourcc,
+        buffers: [Option<buffer::Handle>; 4],
+        pitches: [u32; 4],
+        offsets: [u32; 4],
+        modifier: DrmModifier,
+        plane_count: usize,
+    }
+
+    impl LinuxKmsCapture {
+        pub(super) fn open(path: &Path) -> Result<Self, CaptureError> {
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(path)
+                .map_err(|error| {
+                    CaptureError::Unavailable(format!(
+                        "cannot open DRM device {} for reading and writing: {error}",
+                        path.display()
+                    ))
+                })?;
+            let card = Card(file);
+            card.set_client_capability(ClientCapability::UniversalPlanes, true)
+                .map_err(|error| {
+                    CaptureError::Unavailable(format!(
+                        "{} does not expose universal KMS planes: {error}",
+                        path.display()
+                    ))
+                })?;
+            // Atomic properties improve primary-plane identification. Some older
+            // drivers do not support them, so the CRTC framebuffer remains the
+            // fallback rather than making atomic support mandatory.
+            let _ = card.set_client_capability(ClientCapability::Atomic, true);
+            let egl_file = card.try_clone().map_err(|error| {
+                CaptureError::Unavailable(format!(
+                    "cannot duplicate {} for EGL: {error}",
+                    path.display()
+                ))
+            })?;
+            let egl = EglReader::new(egl_file.0.into()).map_err(|error| {
+                CaptureError::Unavailable(format!(
+                    "cannot create the EGL DMA-BUF reader for {}: {error}",
+                    path.display()
+                ))
+            })?;
+            if caps::has_cap(
+                None,
+                caps::CapSet::Effective,
+                caps::Capability::CAP_SYS_ADMIN,
+            )
+            .unwrap_or(false)
+            {
+                caps::drop(
+                    None,
+                    caps::CapSet::Effective,
+                    caps::Capability::CAP_SYS_ADMIN,
+                )
+                .map_err(|error| {
+                    CaptureError::Unavailable(format!(
+                        "cannot drop effective CAP_SYS_ADMIN after opening {}: {error}",
+                        path.display()
+                    ))
+                })?;
+            }
+            Ok(Self { card, egl })
+        }
+
+        pub(super) fn capture(&self, requested_connector: Option<&str>) -> Result<Frame, String> {
+            // Re-enumerating here is intentional. DRM object and framebuffer IDs
+            // are not stable across modesets or compositor replacement.
+            let active = self.active_framebuffer(requested_connector)?;
+            let descriptor = self.framebuffer_descriptor(active.handle)?;
+            let file_descriptors = self.export_buffers(&descriptor)?;
+            let (width, height) = descriptor.size;
+
+            let modifier = (descriptor.modifier != DrmModifier::Invalid)
+                .then(|| u64::from(descriptor.modifier));
+            let planes = file_descriptors
+                .iter()
+                .enumerate()
+                .take(descriptor.plane_count)
+                .map(|(index, fd)| {
+                    fd.as_ref()
+                        .map(|fd| DmaBufPlane {
+                            fd: fd.as_fd(),
+                            offset: descriptor.offsets[index],
+                            pitch: descriptor.pitches[index],
+                            modifier,
+                        })
+                        .ok_or_else(|| format!("framebuffer plane {index} has no DMA-BUF"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let pixels = self
+                .egl
+                .read_rgb(&DmaBufFrame {
+                    width,
+                    height,
+                    fourcc: descriptor.format as u32,
+                    planes: &planes,
+                })
+                .map_err(|error| {
+                    format!(
+                        "EGL could not read the {:?} framebuffer for {}: {error}",
+                        descriptor.modifier, active.connector
+                    )
+                })?;
+
+            Frame::new(width, height, pixels)
+                .ok_or_else(|| "DRM conversion produced an invalid RGB frame".to_owned())
+        }
+
+        fn active_framebuffer(
+            &self,
+            requested_connector: Option<&str>,
+        ) -> Result<ActiveFramebuffer, String> {
+            let resources = self
+                .card
+                .resource_handles()
+                .map_err(|error| format!("cannot enumerate DRM resources: {error}"))?;
+            let mut connected = Vec::new();
+
+            for handle in resources.connectors() {
+                let info = self
+                    .card
+                    .get_connector(*handle, false)
+                    .map_err(|error| format!("cannot inspect DRM connector {handle:?}: {error}"))?;
+                if info.state() != connector::State::Connected {
+                    continue;
+                }
+                let name = info.to_string();
+                connected.push(name.clone());
+                if requested_connector.is_some_and(|requested| requested != name) {
+                    continue;
+                }
+                let Some(encoder_handle) = info.current_encoder() else {
+                    continue;
+                };
+                let encoder = self
+                    .card
+                    .get_encoder(encoder_handle)
+                    .map_err(|error| format!("cannot inspect encoder for {name}: {error}"))?;
+                let Some(crtc_handle) = encoder.crtc() else {
+                    continue;
+                };
+                if let Some(handle) = self.primary_framebuffer(crtc_handle)? {
+                    return Ok(ActiveFramebuffer {
+                        connector: name,
+                        handle,
+                    });
+                }
+            }
+
+            match requested_connector {
+                Some(requested) => Err(format!(
+                    "connector {requested} is not active; connected connectors: {}",
+                    display_list(&connected)
+                )),
+                None => Err(format!(
+                    "no connected connector has an active primary plane; connected connectors: {}",
+                    display_list(&connected)
+                )),
+            }
+        }
+
+        fn primary_framebuffer(
+            &self,
+            crtc_handle: crtc::Handle,
+        ) -> Result<Option<framebuffer::Handle>, String> {
+            let crtc_framebuffer = self
+                .card
+                .get_crtc(crtc_handle)
+                .map_err(|error| format!("cannot inspect CRTC {crtc_handle:?}: {error}"))?
+                .framebuffer();
+            let planes = self
+                .card
+                .plane_handles()
+                .map_err(|error| format!("cannot enumerate DRM planes: {error}"))?;
+            let mut legacy_match = None;
+
+            for handle in planes {
+                let info = self
+                    .card
+                    .get_plane(handle)
+                    .map_err(|error| format!("cannot inspect DRM plane {handle:?}: {error}"))?;
+                if info.crtc() != Some(crtc_handle) {
+                    continue;
+                }
+                let Some(framebuffer) = info.framebuffer() else {
+                    continue;
+                };
+                if self.plane_type(handle)? == Some(PlaneType::Primary as u64) {
+                    return Ok(Some(framebuffer));
+                }
+                if crtc_framebuffer == Some(framebuffer) {
+                    legacy_match = Some(framebuffer);
+                }
+            }
+            Ok(legacy_match)
+        }
+
+        fn plane_type(&self, handle: plane::Handle) -> Result<Option<u64>, String> {
+            let properties = self
+                .card
+                .get_properties(handle)
+                .map_err(|error| format!("cannot inspect properties for {handle:?}: {error}"))?;
+            for (property_handle, value) in properties.iter() {
+                let property = self.card.get_property(*property_handle).map_err(|error| {
+                    format!("cannot inspect plane property {property_handle:?}: {error}")
+                })?;
+                if property.name().to_bytes() == b"type" {
+                    return Ok(Some(*value));
+                }
+            }
+            Ok(None)
+        }
+
+        fn framebuffer_descriptor(
+            &self,
+            handle: framebuffer::Handle,
+        ) -> Result<FramebufferDescriptor, String> {
+            // GETFB/GETFB2 only returns GEM handles to CAP_SYS_ADMIN. Keep the
+            // capability effective for this narrow ioctl window, as Sunshine
+            // does, rather than retaining it throughout capture and transport.
+            let _admin = EffectiveAdmin::raise()?;
+            match self.card.get_planar_framebuffer(handle) {
+                Ok(info) => {
+                    let buffers = info.buffers();
+                    let plane_count = buffers
+                        .iter()
+                        .rposition(Option::is_some)
+                        .map_or(0, |index| index + 1);
+                    if plane_count == 0 {
+                        return Err(format!(
+                            "DRM framebuffer {handle:?} has no GEM handles; CAP_SYS_ADMIN is usually required"
+                        ));
+                    }
+                    Ok(FramebufferDescriptor {
+                        size: info.size(),
+                        format: info.pixel_format(),
+                        buffers,
+                        pitches: info.pitches(),
+                        offsets: info.offsets(),
+                        modifier: info.modifier().unwrap_or(DrmModifier::Invalid),
+                        plane_count,
+                    })
+                }
+                Err(planar_error) => {
+                    let info = self.card.get_framebuffer(handle).map_err(|legacy_error| {
+                        format!(
+                            "cannot inspect DRM framebuffer {handle:?} (GETFB2: {planar_error}; GETFB: {legacy_error})"
+                        )
+                    })?;
+                    let buffer = info.buffer().ok_or_else(|| {
+                        format!(
+                            "DRM framebuffer {handle:?} has no GEM handle; CAP_SYS_ADMIN is usually required"
+                        )
+                    })?;
+                    Ok(FramebufferDescriptor {
+                        size: info.size(),
+                        format: DrmFourcc::Xrgb8888,
+                        buffers: [Some(buffer), None, None, None],
+                        pitches: [info.pitch(), 0, 0, 0],
+                        offsets: [0; 4],
+                        modifier: DrmModifier::Invalid,
+                        plane_count: 1,
+                    })
+                }
+            }
+        }
+
+        fn export_buffers(
+            &self,
+            descriptor: &FramebufferDescriptor,
+        ) -> Result<[Option<OwnedFd>; 4], String> {
+            let mut exported: [Option<OwnedFd>; 4] = std::array::from_fn(|_| None);
+            for (index, handle) in descriptor.buffers.iter().enumerate() {
+                if let Some(handle) = handle {
+                    match self.card.buffer_to_prime_fd(*handle, 0) {
+                        Ok(fd) => exported[index] = Some(fd),
+                        Err(error) => {
+                            self.close_gem_handles(descriptor);
+                            return Err(format!(
+                                "cannot export framebuffer plane {index} as DMA-BUF: {error}"
+                            ));
+                        }
+                    }
+                }
+            }
+            self.close_gem_handles(descriptor);
+            Ok(exported)
+        }
+
+        fn close_gem_handles(&self, descriptor: &FramebufferDescriptor) {
+            let mut closed = Vec::with_capacity(descriptor.plane_count);
+            for handle in descriptor.buffers.iter().flatten() {
+                if !closed.contains(handle) {
+                    // The exported DMA-BUF FD owns its reference. GETFB/GETFB2's
+                    // temporary GEM handles must be closed once per unique ID.
+                    let _ = self.card.close_buffer(*handle);
+                    closed.push(*handle);
+                }
+            }
+        }
+    }
+
+    fn display_list(connectors: &[String]) -> String {
+        if connectors.is_empty() {
+            "none".to_owned()
+        } else {
+            connectors.join(", ")
+        }
     }
 }
