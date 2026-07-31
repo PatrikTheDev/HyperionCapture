@@ -271,7 +271,7 @@ impl Reader {
             }
 
             let mut texture = 0;
-            glGenTextures(1, &mut texture);
+            glGenTextures(1, &raw mut texture);
             if texture == 0 {
                 (self.destroy_image)(self.display, image);
                 return Err(last_gl_error("glGenTextures failed"));
@@ -282,7 +282,7 @@ impl Reader {
             (self.image_target_texture)(GL_TEXTURE_2D, image.cast_const());
             let image_target_error = glGetError();
             if image_target_error != GL_NO_ERROR {
-                glDeleteTextures(1, &texture);
+                glDeleteTextures(1, &raw const texture);
                 (self.destroy_image)(self.display, image);
                 return Err(Error(format!(
                     "glEGLImageTargetTexture2DOES failed (OpenGL error 0x{image_target_error:04x})"
@@ -310,7 +310,7 @@ impl Reader {
             );
             let gl_error = glGetError();
             glBindTexture(GL_TEXTURE_2D, 0);
-            glDeleteTextures(1, &texture);
+            glDeleteTextures(1, &raw const texture);
             (self.destroy_image)(self.display, image);
             if gl_error != GL_NO_ERROR {
                 return Err(Error(format!(
@@ -381,9 +381,9 @@ unsafe fn create_context(display: EglDisplay) -> Result<(EglContext, EglSurface)
         eglChooseConfig(
             display,
             config_attributes.as_ptr(),
-            &mut config,
+            &raw mut config,
             1,
-            &mut config_count,
+            &raw mut config_count,
         )
     } == EGL_FALSE
         || config_count != 1
