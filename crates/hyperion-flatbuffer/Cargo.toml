@@ -1,0 +1,27 @@
+[package]
+name = "hyperion-flatbuffer"
+description = "Generated low-level bindings for Hyperion's FlatBuffers protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+build = "build.rs"
+
+[dependencies]
+flatbuffers.workspace = true
+
+[build-dependencies]
+flatc-fork.workspace = true
+
+# Generated FlatBuffers accessors contain the unsafe implementations required
+# by the runtime. Keep that exception isolated to this low-level crate.
+[lints.rust]
+unsafe_code = "allow"
+missing_docs = "allow"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"

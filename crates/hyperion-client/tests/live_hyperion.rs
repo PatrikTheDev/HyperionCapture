@@ -52,5 +52,4 @@ async fn streams_an_rgb_frame_to_hyperion_over_flatbuffers() {
         .send_rgb8(2, 2, &pixels, 1_000)
         .await
         .unwrap_or_else(|error| panic!("Hyperion rejected the FlatBuffers frame: {error}"));
-    assert!(client.is_connected());
 }

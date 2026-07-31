@@ -9,7 +9,7 @@ repository.workspace = true
 
 [dependencies]
 base64.workspace = true
-flatbuffers.workspace = true
+hyperion-flatbuffer = { path = "../hyperion-flatbuffer" }
 image.workspace = true
 reqwest.workspace = true
 serde.workspace = true

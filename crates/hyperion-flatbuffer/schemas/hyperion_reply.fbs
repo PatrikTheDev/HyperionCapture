@@ -1,0 +1,11 @@
+// Hyperion 2.2.1 protocol schema:
+// libsrc/flatbufserver/hyperion_reply.fbs
+namespace hyperionnet;
+
+table Reply {
+  error:string;
+  video:int = -1;
+  registered:int = -1;
+}
+
+root_type Reply;

@@ -17,6 +17,8 @@ KDE, or a particular Wayland compositor.
 - `hyperion-capture`: the executable, capture backends, pacing, and lifecycle.
 - `crates/hyperion-client`: reusable typed clients for Hyperion's FlatBuffers
   stream and HTTP JSON image APIs.
+- `crates/hyperion-flatbuffer`: generated, low-level protocol bindings isolated
+  from the safe client API.
 
 The default transport keeps a TCP connection to Hyperion's FlatBuffers server
 on port 19400 and sends packed RGB frames without JPEG or Base64 conversion.
@@ -25,10 +27,12 @@ fallback; it encodes each frame as JPEG and is limited by Hyperion to 25 FPS.
 
 ## Develop on macOS
 
-The Rust toolchain is the only required macOS dependency:
+The Rust toolchain and CMake are the required macOS build dependencies. CMake
+builds the pinned FlatBuffers schema compiler; a separate `flatc` installation
+is not required.
 
 ```sh
-brew install rust
+brew install rust cmake
 cargo --version
 just check
 ```
