@@ -121,6 +121,19 @@ scanout, the modifier extension; otherwise capture returns an explicit error.
 Validate the target AMD/Intel hardware, including its actual modifiers and any
 HDR mode, before deployment.
 
+## SteamOS packaging
+
+The initial SteamOS distribution is a system Flatpak controlled by a companion
+root Decky plugin. The Flatpak provides an immutable, updateable payload and a
+matching graphics runtime. The Decky backend supplies the host-side privileged
+`bwrap` required for KMS framebuffer export, supervises the process, and exposes
+configuration in Game Mode. Both packages live in this repository so releases
+cannot accidentally pair incompatible versions.
+
+See [`packaging/flatpak`](packaging/flatpak/README.md) for the Flatpak build and
+[`packaging/decky`](packaging/decky/README.md) for the launcher security model
+and plugin bundle layout.
+
 ## Tart Linux testing
 
 An Ubuntu 24.04 ARM64 Tart image exercises Linux compilation, virtual KMS

@@ -19,4 +19,15 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --workspace --all-features
+      - run: python3 -m unittest discover -s packaging/decky/tests
 
+  decky:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packaging/decky
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run build

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="console-application">
+  <id>io.github.PatrikTheDev.HyperionCapture</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Hyperion Capture</name>
+  <summary>Send a DRM/KMS display capture to Hyperion</summary>
+  <description>
+    <p>
+      Hyperion Capture reads the active Linux DRM/KMS framebuffer and publishes
+      RGB frames to a Hyperion server without depending on a compositor.
+    </p>
+  </description>
+  <developer id="io.github.PatrikTheDev">
+    <name>PatrikTheDev</name>
+  </developer>
+  <url type="homepage">https://github.com/PatrikTheDev/HyperionCapture</url>
+  <url type="bugtracker">https://github.com/PatrikTheDev/HyperionCapture/issues</url>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="0.1.0" date="2026-07-31" />
+  </releases>
+</component>

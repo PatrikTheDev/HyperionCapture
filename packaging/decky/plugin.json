@@ -1,0 +1,11 @@
+{
+  "name": "Hyperion Capture",
+  "author": "PatrikTheDev",
+  "flags": ["root"],
+  "api_version": 1,
+  "publish": {
+    "tags": ["root", "hyperion", "lighting", "capture"],
+    "description": "Capture SteamOS through DRM/KMS and send frames to Hyperion.",
+    "image": "https://opengraph.githubassets.com/1/PatrikTheDev/HyperionCapture"
+  }
+}

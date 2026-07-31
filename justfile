@@ -6,9 +6,18 @@ check:
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --all-features -- -D warnings
     cargo test --workspace --all-features
+    python3 -m unittest discover -s packaging/decky/tests
 
 format:
     cargo fmt --all
+
+# Build the Decky Game Mode frontend after installing its JS dependencies.
+decky-build:
+    bun run --cwd packaging/decky build
+
+# Assemble a Decky ZIP after the Flatpak bundle has been placed in bin/.
+decky-package:
+    packaging/decky/build-package.sh
 
 run *args:
     cargo run -- {{args}}

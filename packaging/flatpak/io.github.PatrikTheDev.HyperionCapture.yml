@@ -1,0 +1,38 @@
+app-id: io.github.PatrikTheDev.HyperionCapture
+runtime: org.freedesktop.Platform
+runtime-version: "25.08"
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: hyperion-capture
+
+finish-args:
+  # Hyperion is normally reached over the LAN.
+  - --share=network
+  # Exposes /dev/dri, but does not itself grant CAP_SYS_ADMIN. The Decky host
+  # launcher supplies the privileged sandbox setup required by GETFB2.
+  - --device=dri
+
+modules:
+  - name: hyperion-capture
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/hyperion-capture/cargo
+    build-commands:
+      - cargo --offline --locked build --release
+      - install -Dm755 target/release/hyperion-capture /app/bin/hyperion-capture
+      - install -Dm644 packaging/flatpak/io.github.PatrikTheDev.HyperionCapture.metainfo.xml /app/share/metainfo/io.github.PatrikTheDev.HyperionCapture.metainfo.xml
+    sources:
+      - cargo-sources.json
+      - type: dir
+        path: ../..
+        skip:
+          - .git
+          - .flatpak-builder
+          - build-flatpak
+          - target
+          - packaging/decky/node_modules
+          - packaging/decky/dist
+          - packaging/decky/bin/*.flatpak

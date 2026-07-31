@@ -1,0 +1,6 @@
+node_modules/
+dist/
+bin/*.flatpak
+out/
+__pycache__/
+*.pyc
