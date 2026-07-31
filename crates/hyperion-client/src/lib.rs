@@ -1,7 +1,15 @@
-//! A small typed client for sending captured images to Hyperion.
+//! Typed clients for sending captured frames to Hyperion.
 //!
-//! Hyperion limits JSON API image updates to 25 Hz. Callers are responsible for
-//! pacing requests at or below that rate.
+//! [`FlatbufferClient`] is intended for continuous raw RGB video. The existing
+//! [`HyperionClient`] sends independent JPEG images through the HTTP JSON API,
+//! which Hyperion limits to 25 updates per second.
+
+mod flatbuffer;
+
+pub use flatbuffer::{
+    DEFAULT_FLATBUFFER_PORT, Error as FlatbufferError, FlatbufferClient, FlatbufferConfig,
+    MAX_FLATBUFFER_PRIORITY, MIN_FLATBUFFER_PRIORITY,
+};
 
 use std::io::Cursor;
 
@@ -13,8 +21,12 @@ use url::Url;
 
 /// Default input priority used for captured frames.
 pub const DEFAULT_PRIORITY: u16 = 150;
+/// Lowest priority accepted by Hyperion for image inputs.
+pub const MIN_PRIORITY: u16 = 1;
+/// Highest priority accepted by Hyperion for image inputs.
+pub const MAX_PRIORITY: u16 = 253;
 
-/// Configuration for a [`HyperionClient`].
+/// Configuration for the HTTP image [`HyperionClient`].
 #[derive(Clone, Debug)]
 pub struct ClientConfig {
     /// Hyperion web server base URL, usually `http://host:8090`.
@@ -43,7 +55,7 @@ impl ClientConfig {
     }
 }
 
-/// An asynchronous Hyperion JSON API client.
+/// An asynchronous client for Hyperion's HTTP JSON image endpoint.
 #[derive(Clone, Debug)]
 pub struct HyperionClient {
     http: HttpClient,
@@ -60,6 +72,9 @@ impl HyperionClient {
     pub fn new(config: ClientConfig) -> Result<Self, Error> {
         if !(1..=100).contains(&config.jpeg_quality) {
             return Err(Error::InvalidJpegQuality(config.jpeg_quality));
+        }
+        if !(MIN_PRIORITY..=MAX_PRIORITY).contains(&config.priority) {
+            return Err(Error::InvalidPriority(config.priority));
         }
 
         let endpoint = config
@@ -103,7 +118,8 @@ impl HyperionClient {
             command: "image",
             image_data: STANDARD.encode(encoded),
             name: "screen",
-            format: "jpeg",
+            // Hyperion 2.2.x only accepts `auto` and determines JPEG from the payload.
+            format: "auto",
             priority: self.config.priority,
             duration: duration_ms,
             origin: &self.config.origin,
@@ -160,6 +176,9 @@ pub enum Error {
     /// JPEG quality was outside its valid range.
     #[error("JPEG quality must be between 1 and 100, got {0}")]
     InvalidJpegQuality(u8),
+    /// Input priority was outside Hyperion's accepted range.
+    #[error("Hyperion priority must be between {MIN_PRIORITY} and {MAX_PRIORITY}, got {0}")]
+    InvalidPriority(u16),
     /// The packed RGB buffer length did not match its dimensions.
     #[error("RGB buffer does not contain exactly {width}x{height} pixels")]
     InvalidRgbBuffer {
@@ -214,6 +233,48 @@ mod tests {
         assert_eq!(
             client.endpoint.as_str(),
             "http://127.0.0.1:8090/json-rpc/input/image"
+        );
+    }
+
+    #[test]
+    fn rejects_reserved_priority() {
+        let mut config = ClientConfig::new(
+            Url::parse("http://127.0.0.1:8090/").unwrap_or_else(|error| panic!("{error}")),
+        );
+        config.priority = 254;
+
+        assert!(matches!(
+            HyperionClient::new(config),
+            Err(Error::InvalidPriority(254))
+        ));
+    }
+
+    #[test]
+    fn serializes_the_documented_image_request() {
+        let request = ImageRequest {
+            command: "image",
+            image_data: "aW1hZ2U=".to_owned(),
+            name: "screen",
+            format: "auto",
+            priority: DEFAULT_PRIORITY,
+            duration: 1_000,
+            origin: "hyperion-capture",
+        };
+
+        let value = serde_json::to_value(request)
+            .unwrap_or_else(|error| panic!("failed to serialize image request: {error}"));
+
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "command": "image",
+                "imagedata": "aW1hZ2U=",
+                "name": "screen",
+                "format": "auto",
+                "priority": 150,
+                "duration": 1_000,
+                "origin": "hyperion-capture"
+            })
         );
     }
 }

@@ -5,23 +5,44 @@ use url::Url;
 #[derive(Clone, Debug, Parser)]
 #[command(version, about)]
 pub struct Cli {
-    /// Hyperion web server base URL.
+    /// Hyperion server URL; its host is also used for flat-buffer streaming.
     #[arg(long, env = "HYPERION_URL", default_value = "http://127.0.0.1:8090/")]
     pub hyperion_url: Url,
 
     /// Hyperion API bearer token.
+    ///
+    /// Used only by the JSON image transport; Hyperion's flat-buffer protocol
+    /// does not define token authentication.
     #[arg(long, env = "HYPERION_TOKEN", hide_env_values = true)]
     pub hyperion_token: Option<String>,
 
-    /// Hyperion input priority; lower values win.
-    #[arg(long, env = "HYPERION_PRIORITY", default_value_t = 150)]
+    /// Transport used to publish captured frames.
+    #[arg(
+        long,
+        env = "HYPERION_TRANSPORT",
+        value_enum,
+        default_value_t = HyperionTransport::Flatbuffers
+    )]
+    pub hyperion_transport: HyperionTransport,
+
+    /// Hyperion flat-buffer TCP port; the host comes from --hyperion-url.
+    #[arg(long, env = "HYPERION_FLATBUFFER_PORT", default_value_t = 19_400)]
+    pub hyperion_flatbuffer_port: u16,
+
+    /// Input priority; use 100-199 for flat buffers or 1-253 for JSON images.
+    #[arg(
+        long,
+        env = "HYPERION_PRIORITY",
+        default_value_t = 150,
+        value_parser = clap::value_parser!(u16).range(1..=253)
+    )]
     pub priority: u16,
 
-    /// Capture frames per second (Hyperion JSON API supports at most 25).
-    #[arg(long, default_value = "20", value_parser = clap::value_parser!(u8).range(1..=25))]
-    pub fps: u8,
+    /// Capture frames per second. The JSON image fallback supports at most 25.
+    #[arg(long, default_value = "20", value_parser = clap::value_parser!(u16).range(1..=120))]
+    pub fps: u16,
 
-    /// JPEG quality used to send frames.
+    /// JPEG quality used only by the JSON image transport.
     #[arg(long, default_value = "85", value_parser = clap::value_parser!(u8).range(1..=100))]
     pub jpeg_quality: u8,
 
@@ -48,4 +69,12 @@ pub enum CaptureMethod {
     Kms,
     /// Generated RGB frames for development and API testing.
     TestPattern,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum HyperionTransport {
+    /// Persistent raw RGB streaming over Hyperion's flat-buffer TCP protocol.
+    Flatbuffers,
+    /// Independent JPEG images over Hyperion's HTTP JSON API.
+    JsonImage,
 }

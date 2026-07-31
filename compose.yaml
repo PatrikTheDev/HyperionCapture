@@ -1,0 +1,24 @@
+name: hyperion-capture
+
+services:
+  hyperion:
+    build:
+      context: docker/hyperion
+      args:
+        HYPERION_VERSION: "2.2.1"
+    ports:
+      - "127.0.0.1:8090:8090"
+      - "127.0.0.1:19400:19400"
+      - "127.0.0.1:19444:19444"
+    volumes:
+      - hyperion-data:/config
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8090/"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  hyperion-data:

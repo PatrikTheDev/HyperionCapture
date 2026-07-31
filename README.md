@@ -15,12 +15,13 @@ KDE, or a particular Wayland compositor.
 ## Workspace
 
 - `hyperion-capture`: the executable, capture backends, pacing, and lifecycle.
-- `crates/hyperion-client`: reusable typed client for Hyperion's HTTP JSON API.
+- `crates/hyperion-client`: reusable typed clients for Hyperion's FlatBuffers
+  stream and HTTP JSON image APIs.
 
-Frames are encoded as JPEG and sent to `/json-rpc/input/image`. Hyperion limits
-JSON API images to 25 updates per second, so the executable defaults to 20 FPS
-and rejects values above 25. A future FlatBuffers transport can be added to the
-client crate if lower overhead or raw image streaming is required.
+The default transport keeps a TCP connection to Hyperion's FlatBuffers server
+on port 19400 and sends packed RGB frames without JPEG or Base64 conversion.
+The HTTP `/json-rpc/input/image` transport remains available as a compatibility
+fallback; it encodes each frame as JPEG and is limited by Hyperion to 25 FPS.
 
 ## Develop on macOS
 
@@ -38,18 +39,50 @@ the project, but cannot run the DRM/KMS backend.
 
 ## Run
 
-Use the generated source to validate credentials and the Hyperion connection:
+Use the generated source to validate the FlatBuffers stream:
 
 ```sh
-export HYPERION_TOKEN='your-token'
 cargo run -- \
   --capture test-pattern \
   --hyperion-url http://hyperion.local:8090/
 ```
 
 Configuration is available through flags and the `HYPERION_URL`,
-`HYPERION_TOKEN`, and `HYPERION_PRIORITY` environment variables. Run
-`cargo run -- --help` for the complete list.
+`HYPERION_TRANSPORT`, and `HYPERION_PRIORITY` environment variables. The host
+from `HYPERION_URL` is also used for FlatBuffers; its port can be changed with
+`HYPERION_FLATBUFFER_PORT`.
+
+To use the retained HTTP image transport:
+
+```sh
+export HYPERION_TOKEN='your-token'
+cargo run -- --hyperion-transport json-image --capture test-pattern
+```
+
+Hyperion's FlatBuffers protocol does not carry API bearer tokens. Access to its
+TCP port should therefore be restricted to trusted networks. Run
+`cargo run -- --help` for the complete option list.
+
+## Local Hyperion deployment
+
+The repository includes a Docker Compose deployment built directly from
+Hyperion's official, checksum-verified 2.2.1 Debian packages. It supports both
+Apple Silicon and Intel Macs and binds its ports to localhost only.
+
+```sh
+just hyperion-up
+open http://127.0.0.1:8090/
+just integration
+```
+
+`just integration` sends real 2x2 RGB frames through both the persistent
+FlatBuffers stream and the JPEG image endpoint. This validates both client
+transports against a live daemon without requiring LED hardware. The deployment
+persists configuration in a named volume. Use `just hyperion-down` to stop it
+or `just hyperion-reset` to also erase that test configuration.
+
+This environment validates the API side of the pipeline; it does not emulate a
+DRM device and therefore cannot validate KMS capture.
 
 ## Linux capture plan
 
@@ -70,17 +103,20 @@ added alongside the backend, once its system calls are known.
 
 ## Hyperion setup
 
-Create a non-admin API token in Hyperion and pass it through
-`HYPERION_TOKEN`. The default priority is 150; lower values take precedence in
-Hyperion. Each frame has a short expiry, so lighting falls back to another input
-when capture stops unexpectedly.
+Enable Hyperion's FlatBuffers server and allow TCP port 19400 from the capture
+host. FlatBuffers streaming priorities must be between 100 and 199; the default
+is 150. Lower values take precedence in Hyperion. Each frame has a short expiry,
+and disconnecting the stream clears its registered input.
+
+For the HTTP image fallback, create a non-admin API token in Hyperion and pass
+it through `HYPERION_TOKEN`.
 
 ## Quality gates
 
 `just check` verifies formatting, runs Clippy with warnings denied, and executes
-all workspace tests. CI runs the same checks on every push and pull request.
+all workspace tests (the Docker-backed test remains explicitly ignored). CI
+runs the same checks on every push and pull request.
 
 ## License
 
 MIT
-

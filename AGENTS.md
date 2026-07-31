@@ -22,7 +22,11 @@ Run `just check` before handing off changes. Use `just format` to apply Rust
 formatting. Add unit tests for protocol serialization and capture-independent
 logic; gate hardware tests so ordinary CI does not require `/dev/dri`.
 
+Use `just integration` when changing Hyperion transport behavior. It builds and
+starts the pinned local Hyperion deployment, then runs the ignored live API
+test. Use `just hyperion-down` when finished or `just hyperion-reset` when a
+clean Hyperion database is required.
+
 Unsafe Rust is forbidden at the workspace level. If a future DRM/GBM binding
 requires unsafe code, isolate it in a dedicated low-level crate, document every
 safety invariant, and change the lint only for that crate after review.
-
