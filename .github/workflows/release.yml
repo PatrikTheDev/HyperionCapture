@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  decky-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.85.0
+
+      - name: Validate tag and package versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          cargo_version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "hyperion-capture") | .version')"
+          decky_version="$(jq -r '.version' packaging/decky/package.json)"
+          flatpak_version="$(sed -n 's/.*<release version="\([^"]*\)".*/\1/p' packaging/flatpak/io.github.PatrikTheDev.HyperionCapture.metainfo.xml | head -n 1)"
+          test "$version" = "$cargo_version"
+          test "$version" = "$decky_version"
+          test "$version" = "$flatpak_version"
+
+      - name: Install Flatpak build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes flatpak flatpak-builder
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user --noninteractive flathub \
+            org.freedesktop.Platform//25.08 \
+            org.freedesktop.Sdk//25.08 \
+            org.freedesktop.Sdk.Extension.rust-stable//25.08
+
+      - name: Build Flatpak bundle
+        run: |
+          flatpak-builder --force-clean --repo=flatpak-repo build-flatpak \
+            packaging/flatpak/io.github.PatrikTheDev.HyperionCapture.yml
+          flatpak build-bundle \
+            --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo \
+            flatpak-repo \
+            packaging/decky/bin/io.github.PatrikTheDev.HyperionCapture.flatpak \
+            io.github.PatrikTheDev.HyperionCapture
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Build Decky release archive
+        run: |
+          bun install --cwd packaging/decky --frozen-lockfile
+          packaging/decky/build-package.sh
+          sha256sum \
+            packaging/decky/out/HyperionCapture.zip \
+            packaging/decky/bin/io.github.PatrikTheDev.HyperionCapture.flatpak \
+            > packaging/decky/out/SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HyperionCapture-${{ github.ref_name }}
+          path: |
+            packaging/decky/out/HyperionCapture.zip
+            packaging/decky/bin/io.github.PatrikTheDev.HyperionCapture.flatpak
+            packaging/decky/out/SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            packaging/decky/out/HyperionCapture.zip
+            packaging/decky/bin/io.github.PatrikTheDev.HyperionCapture.flatpak
+            packaging/decky/out/SHA256SUMS

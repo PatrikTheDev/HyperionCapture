@@ -2,6 +2,28 @@ use std::path::PathBuf;
 
 use super::{CaptureError, CaptureSource, Frame};
 
+/// Default maximum output height for the KMS GPU conversion pass.
+pub const DEFAULT_OUTPUT_HEIGHT: u32 = 480;
+
+/// Policy applied while opening a KMS capture source.
+#[derive(Clone, Debug)]
+pub struct KmsCaptureOptions {
+    /// Stable connector name such as `DP-1`, or the first active connector.
+    pub connector: Option<String>,
+    /// Maximum output height. Aspect ratio is preserved and smaller inputs are
+    /// never enlarged.
+    pub max_output_height: u32,
+}
+
+impl Default for KmsCaptureOptions {
+    fn default() -> Self {
+        Self {
+            connector: None,
+            max_output_height: DEFAULT_OUTPUT_HEIGHT,
+        }
+    }
+}
+
 /// Direct DRM/KMS capture backend.
 ///
 /// The Linux implementation follows Sunshine's KMS path: it selects an active
@@ -16,25 +38,31 @@ pub struct KmsCapture {
     #[cfg(target_os = "linux")]
     connector: Option<String>,
     #[cfg(target_os = "linux")]
+    max_output_height: u32,
+    #[cfg(target_os = "linux")]
     backend: linux::LinuxKmsCapture,
 }
 
 impl KmsCapture {
-    /// Opens the first active connector on a DRM card.
-    pub fn open(device: impl Into<PathBuf>) -> Result<Self, CaptureError> {
-        Self::open_connector(device, None)
-    }
-
-    /// Opens a DRM card and optionally selects a connector such as `DP-1`.
-    pub fn open_connector(
+    /// Opens a DRM card with explicit connector and GPU-output policy.
+    pub fn open_with_options(
         device: impl Into<PathBuf>,
-        connector: Option<&str>,
+        options: KmsCaptureOptions,
     ) -> Result<Self, CaptureError> {
         let device = device.into();
+        let KmsCaptureOptions {
+            connector,
+            max_output_height,
+        } = options;
+        if max_output_height == 0 {
+            return Err(CaptureError::Unavailable(
+                "KMS maximum output height must be non-zero".to_owned(),
+            ));
+        }
 
         #[cfg(not(target_os = "linux"))]
         {
-            let _ = connector;
+            let _ = (connector, max_output_height);
             Err(CaptureError::Unavailable(format!(
                 "DRM/KMS capture only runs on Linux (requested {})",
                 device.display()
@@ -46,7 +74,8 @@ impl KmsCapture {
             let backend = linux::LinuxKmsCapture::open(&device)?;
             Ok(Self {
                 device,
-                connector: connector.map(str::to_owned),
+                connector,
+                max_output_height,
                 backend,
             })
         }
@@ -63,7 +92,7 @@ impl CaptureSource for KmsCapture {
 
         #[cfg(target_os = "linux")]
         self.backend
-            .capture(self.connector.as_deref())
+            .capture(self.connector.as_deref(), self.max_output_height)
             .map_err(|error| {
                 CaptureError::Unavailable(format!("{}: {error}", self.device.display()))
             })
@@ -83,7 +112,9 @@ mod linux {
         control::{Device as ControlDevice, PlaneType, connector, crtc, framebuffer, plane},
     };
     use drm_fourcc::{DrmFourcc, DrmModifier};
-    use kms_egl::{DmaBufFrame, DmaBufPlane, Reader as EglReader};
+    use kms_egl::{
+        DmaBufFrame, DmaBufPlane, ReadbackOptions, Reader as EglReader, TransferFunction,
+    };
 
     use super::{CaptureError, Frame};
 
@@ -143,6 +174,7 @@ mod linux {
     struct ActiveFramebuffer {
         connector: String,
         handle: framebuffer::Handle,
+        transfer_function: TransferFunction,
     }
 
     #[derive(Debug)]
@@ -214,7 +246,11 @@ mod linux {
             Ok(Self { card, egl })
         }
 
-        pub(super) fn capture(&self, requested_connector: Option<&str>) -> Result<Frame, String> {
+        pub(super) fn capture(
+            &mut self,
+            requested_connector: Option<&str>,
+            max_output_height: u32,
+        ) -> Result<Frame, String> {
             // Re-enumerating here is intentional. DRM object and framebuffer IDs
             // are not stable across modesets or compositor replacement.
             let active = self.active_framebuffer(requested_connector)?;
@@ -239,14 +275,20 @@ mod linux {
                         .ok_or_else(|| format!("framebuffer plane {index} has no DMA-BUF"))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            let pixels = self
+            let output = self
                 .egl
-                .read_rgb(&DmaBufFrame {
-                    width,
-                    height,
-                    fourcc: descriptor.format as u32,
-                    planes: &planes,
-                })
+                .read_rgb(
+                    &DmaBufFrame {
+                        width,
+                        height,
+                        fourcc: descriptor.format as u32,
+                        planes: &planes,
+                    },
+                    ReadbackOptions {
+                        max_height: max_output_height,
+                        transfer_function: active.transfer_function,
+                    },
+                )
                 .map_err(|error| {
                     format!(
                         "EGL could not read the {:?} framebuffer for {}: {error}",
@@ -254,7 +296,7 @@ mod linux {
                     )
                 })?;
 
-            Frame::new(width, height, pixels)
+            Frame::new(output.width, output.height, output.pixels)
                 .ok_or_else(|| "DRM conversion produced an invalid RGB frame".to_owned())
         }
 
@@ -268,11 +310,13 @@ mod linux {
                 .map_err(|error| format!("cannot enumerate DRM resources: {error}"))?;
             let mut connected = Vec::new();
 
-            for handle in resources.connectors() {
+            for connector_handle in resources.connectors() {
                 let info = self
                     .card
-                    .get_connector(*handle, false)
-                    .map_err(|error| format!("cannot inspect DRM connector {handle:?}: {error}"))?;
+                    .get_connector(*connector_handle, false)
+                    .map_err(|error| {
+                        format!("cannot inspect DRM connector {connector_handle:?}: {error}")
+                    })?;
                 if info.state() != connector::State::Connected {
                     continue;
                 }
@@ -292,9 +336,11 @@ mod linux {
                     continue;
                 };
                 if let Some(handle) = self.primary_framebuffer(crtc_handle)? {
+                    let transfer_function = self.connector_transfer_function(*connector_handle)?;
                     return Ok(ActiveFramebuffer {
                         connector: name,
                         handle,
+                        transfer_function,
                     });
                 }
             }
@@ -315,6 +361,13 @@ mod linux {
             &self,
             crtc_handle: crtc::Handle,
         ) -> Result<Option<framebuffer::Handle>, String> {
+            // The framebuffer is kept in the compositor's logical orientation.
+            // KMS `rotation` commonly describes how a portrait-native handheld
+            // panel is mounted; applying it again would rotate Gamescope's
+            // already-landscape content. Source crop/scaling properties are not
+            // applied yet. Supporting unusual primary-plane crops should carry
+            // a normalized source rectangle into ReadbackOptions and transform
+            // the shader UVs, without adding a CPU copy here.
             let crtc_framebuffer = self
                 .card
                 .get_crtc(crtc_handle)
@@ -345,6 +398,28 @@ mod linux {
                 }
             }
             Ok(legacy_match)
+        }
+
+        fn connector_transfer_function(
+            &self,
+            handle: connector::Handle,
+        ) -> Result<TransferFunction, String> {
+            let properties = self.card.get_properties(handle).map_err(|error| {
+                format!("cannot inspect HDR properties for connector {handle:?}: {error}")
+            })?;
+            for (property_handle, raw_value) in properties.iter() {
+                let property = self.card.get_property(*property_handle).map_err(|error| {
+                    format!("cannot inspect connector property {property_handle:?}: {error}")
+                })?;
+                if property.name().to_bytes() != b"HDR_OUTPUT_METADATA" || *raw_value == 0 {
+                    continue;
+                }
+                let blob = self.card.get_property_blob(*raw_value).map_err(|error| {
+                    format!("cannot read HDR_OUTPUT_METADATA blob {raw_value}: {error}")
+                })?;
+                return parse_hdr_transfer_function(&blob);
+            }
+            Ok(TransferFunction::Srgb)
         }
 
         fn plane_type(&self, handle: plane::Handle) -> Result<Option<u64>, String> {
@@ -457,6 +532,70 @@ mod linux {
             "none".to_owned()
         } else {
             connectors.join(", ")
+        }
+    }
+
+    fn parse_hdr_transfer_function(blob: &[u8]) -> Result<TransferFunction, String> {
+        // Linux's `hdr_output_metadata` starts with a native u32 metadata type,
+        // followed by CTA-861 Static Metadata Type 1's EOTF and metadata-type
+        // bytes. KMS UAPI structures use the host's native endianness.
+        let header = blob.get(..6).ok_or_else(|| {
+            format!(
+                "HDR_OUTPUT_METADATA blob is too small: {} bytes",
+                blob.len()
+            )
+        })?;
+        let metadata_type = u32::from_ne_bytes(
+            header[..4]
+                .try_into()
+                .map_err(|_| "HDR metadata type is truncated".to_owned())?,
+        );
+        if metadata_type != 0 {
+            return Err(format!(
+                "unsupported HDR_OUTPUT_METADATA type {metadata_type}; only CTA-861 Static Metadata Type 1 is supported"
+            ));
+        }
+        if header[5] != 0 {
+            return Err(format!(
+                "unsupported CTA-861 HDR metadata type {}",
+                header[5]
+            ));
+        }
+        match header[4] {
+            0 => Ok(TransferFunction::Srgb),
+            2 => Ok(TransferFunction::Pq),
+            3 => Ok(TransferFunction::Hlg),
+            1 => Err(
+                "traditional-gamma HDR scanout is not supported; PQ and HLG are supported"
+                    .to_owned(),
+            ),
+            eotf => Err(format!(
+                "unsupported CTA-861 HDR transfer function {eotf}; PQ and HLG are supported"
+            )),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{TransferFunction, parse_hdr_transfer_function};
+
+        #[test]
+        fn parses_pq_and_hlg_hdr_metadata() -> Result<(), String> {
+            assert_eq!(
+                parse_hdr_transfer_function(&[0, 0, 0, 0, 2, 0])?,
+                TransferFunction::Pq
+            );
+            assert_eq!(
+                parse_hdr_transfer_function(&[0, 0, 0, 0, 3, 0])?,
+                TransferFunction::Hlg
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn rejects_unknown_hdr_transfer_function() {
+            let result = parse_hdr_transfer_function(&[0, 0, 0, 0, 9, 0]);
+            assert!(result.is_err_and(|error| error.contains("transfer function 9")));
         }
     }
 }

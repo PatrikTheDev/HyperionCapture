@@ -4,6 +4,15 @@ This directory defines a reproducible Ubuntu 24.04 ARM64 guest for testing the
 Linux-only portions of Hyperion Capture from an Apple Silicon development Mac.
 It follows Tart's official image, directory-sharing, and guest-execution model.
 
+The provisioned image is also published as
+`ghcr.io/patrikthedev/hyperioncapture-tart-ubuntu:24.04` (and `:latest`). Clone
+it when a prebuilt guest is preferable:
+
+```sh
+tart clone ghcr.io/patrikthedev/hyperioncapture-tart-ubuntu:24.04 \
+  hyperion-capture-ubuntu
+```
+
 ## Lifecycle
 
 The host helper defaults to the official
@@ -44,7 +53,8 @@ test command verifies:
 2. connectors, encoders, CRTCs, formats, and planes can be enumerated;
 3. the kernel's current atomic DRM state can be inspected;
 4. formatting, Clippy, unit tests, and the Linux build pass; and
-5. the real KMS backend remains alive while capturing for eight seconds.
+5. the real KMS backend imports the scanout through EGL/OpenGL ES, scales it to
+   at most 480 pixels high, and remains alive while capturing for eight seconds.
 
 The Hyperion URL in the final probe is intentionally an unused local port.
 Transport failures are expected and keep the probe independent of a Hyperion
@@ -101,10 +111,9 @@ Use the following test tiers before considering the capture backend complete:
 4. a SteamOS device for repeated Game Mode to KDE Plasma transitions while the
    capture service remains running.
 
-If a shareable image is desired later, stop the provisioned VM and use Tart's
-documented OCI workflow, for example `tart push <local-name>
-ghcr.io/<owner>/<image>:<tag>`. Registry selection, authentication, and pushing
-are intentionally left for explicit coordination.
+The image above is the shared baseline. Re-provision and publish a new tag only
+when guest dependencies or the image recipe change; ordinary source changes are
+built from the read-only checkout by `vm/tart/manage.sh test`.
 
 References:
 

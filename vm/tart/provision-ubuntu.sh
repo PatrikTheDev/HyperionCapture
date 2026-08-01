@@ -27,8 +27,8 @@ apt-get install --yes --no-install-recommends \
     libdrm-tests \
     libegl1-mesa-dev \
     libgbm-dev \
+    libgles2-mesa-dev \
     libgl1-mesa-dri \
-    libgl1-mesa-dev \
     libseat1 \
     mesa-utils \
     mesa-vulkan-drivers \

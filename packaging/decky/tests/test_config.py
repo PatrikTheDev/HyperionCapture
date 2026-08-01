@@ -26,6 +26,8 @@ class CaptureConfigTests(unittest.TestCase):
                 "150",
                 "--fps",
                 "20",
+                "--output-height",
+                "480",
                 "--drm-device",
                 "/dev/dri/card0",
                 "--drm-connector",
@@ -48,6 +50,10 @@ class CaptureConfigTests(unittest.TestCase):
     def test_rejects_fractional_numeric_fields(self) -> None:
         with self.assertRaisesRegex(TypeError, "FPS must be an integer"):
             CaptureConfig.from_mapping({"fps": 20.5})
+
+    def test_rejects_invalid_output_height(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Output height"):
+            CaptureConfig.from_mapping({"output_height": 0})
 
     def test_rejects_string_boolean(self) -> None:
         with self.assertRaisesRegex(TypeError, "true or false"):

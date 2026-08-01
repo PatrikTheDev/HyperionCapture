@@ -43,7 +43,8 @@ cargo run -- \
 ```
 
 Configuration is available through flags and the `HYPERION_URL`,
-`HYPERION_TRANSPORT`, and `HYPERION_PRIORITY` environment variables. The host
+`HYPERION_TRANSPORT`, `HYPERION_PRIORITY`, and `HYPERION_OUTPUT_HEIGHT`
+environment variables. The host
 from `HYPERION_URL` is also used for FlatBuffers; its port can be changed with
 `HYPERION_FLATBUFFER_PORT`.
 
@@ -66,6 +67,7 @@ cargo run --release -- \
   --capture kms \
   --drm-device /dev/dri/card1 \
   --drm-connector DP-1 \
+  --output-height 480 \
   --hyperion-url http://hyperion.local:8090/
 ```
 
@@ -96,8 +98,11 @@ DRM device and therefore cannot validate KMS capture.
 enumerates connected DRM connectors and their CRTCs, selects the active primary
 plane, reads the current framebuffer metadata with `GETFB2` (and the legacy
 `GETFB` fallback), exports its GEM planes as DMA-BUFs, and imports them as EGL
-images through a GBM-backed display. OpenGL performs modifier-aware GPU
-readback and normalizes the framebuffer to packed RGB8 at the Hyperion boundary.
+images through a GBM-backed display. An OpenGL ES 2 shader downsamples in
+linear light to a maximum height of 480 pixels by default, preserving aspect
+ratio and never enlarging smaller inputs. Only the small result is read back
+and normalized to packed RGB8 at the Hyperion boundary. A 1920x1080 scanout
+therefore becomes 854x480 instead of consuming roughly 1 Gbit/s at 20 FPS.
 
 All connector, encoder, CRTC, plane, and framebuffer IDs are rediscovered for
 each frame. DRM IDs can change during a modeset, so this is what allows a
@@ -113,13 +118,32 @@ device access to the selected `/dev/dri/card*`; do not run the service as root.
 Never expose a capability-bearing development binary from a writable build
 directory as a production service.
 
-Unsafe GBM/EGL/OpenGL FFI is isolated in the `kms-egl` crate, whose safe API
+Unsafe GBM/EGL/OpenGL ES FFI is isolated in the `kms-egl` crate, whose safe API
 owns the duplicated DRM descriptor, validates plane metadata, checks allocation
 sizes, and keeps EGL/GL state thread-affine. The main capture crate remains
 `unsafe_code = "forbid"`. Drivers must expose EGL DMA-BUF import and, for tiled
 scanout, the modifier extension; otherwise capture returns an explicit error.
 Validate the target AMD/Intel hardware, including its actual modifiers and any
 HDR mode, before deployment.
+
+### HDR and scanout formats
+
+The connector's `HDR_OUTPUT_METADATA` property is checked for every frame, so
+HDR changes are followed without restarting capture. Single-plane XRGB/ARGB and
+XBGR/ABGR scanout in 8-bit and 10-bit variants is supported. PQ and HLG BT.2020
+are decoded in the scaling shader, converted to BT.709, and tone-mapped into the
+SDR RGB8 values consumed by Hyperion. This is HDR-aware ambient-light capture;
+Hyperion is not sent an HDR signal. The tone mapper uses a 203-nit SDR reference
+white and an ACES fitted curve.
+
+Unknown HDR EOTFs and non-RGB or multi-plane DMA-BUF formats fail explicitly.
+Multi-plane YUV requires `GL_TEXTURE_EXTERNAL_OES` plus KMS color range/matrix
+metadata and is left as a documented extension in `kms-egl`; silently treating
+it as RGB would produce incorrect colors. The capture currently follows the
+logical framebuffer orientation. KMS panel rotation is deliberately not
+reapplied, while unusual primary-plane source crops remain future shader-UV
+work. Hardware cursor and overlay planes are not included, which is appropriate
+for ambient lighting but should be revisited for general-purpose screenshots.
 
 ## SteamOS packaging
 
@@ -133,6 +157,24 @@ cannot accidentally pair incompatible versions.
 See [`packaging/flatpak`](packaging/flatpak/README.md) for the Flatpak build and
 [`packaging/decky`](packaging/decky/README.md) for the launcher security model
 and plugin bundle layout.
+
+The Decky UI exposes the 480-pixel maximum output height and the tagged release
+workflow builds the system Flatpak, embeds it into `HyperionCapture.zip`, writes
+checksums, and attaches the Decky archive and standalone Flatpak bundle to the
+matching GitHub release. Tag, Cargo, Decky, and Flatpak metadata versions must
+match.
+
+### Health and readiness ownership
+
+The Rust capture process owns health and readiness because it alone can tell
+whether DRM capture and Hyperion publication are succeeding. Process existence
+is liveness only. Readiness should mean that a frame was captured recently and
+Hyperion accepted a frame recently; a disconnected Hyperion server or a KMS
+handoff is temporarily not ready even while the process remains healthy. A
+future local Unix status socket should expose those timestamps and the current
+connector/output dimensions. The Decky Python backend should proxy that status
+to Game Mode rather than inventing readiness from `flatpak ps`. No public HTTP
+health endpoint is planned.
 
 ## Tart Linux testing
 
@@ -154,7 +196,7 @@ The checkout is mounted read-only and guest build artifacts stay on the VM.
 Tart's virtual GPU is useful for KMS integration but cannot reproduce physical
 AMD/Intel modifiers, GPU passthrough, or the real Gamescope↔Plasma handoff.
 Those remain native SteamOS acceptance tests. The complete tiered strategy,
-optional modeset fixture, image lifecycle, and future OCI push handoff are in
+optional modeset fixture, image lifecycle, and published OCI image are in
 [`vm/tart/TESTING.md`](vm/tart/TESTING.md).
 
 ## Hyperion setup

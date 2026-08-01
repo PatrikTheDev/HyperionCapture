@@ -5,7 +5,7 @@ use tokio::time::{MissedTickBehavior, interval};
 use tracing::{info, warn};
 
 use crate::{
-    capture::{CaptureSource, KmsCapture, TestPatternCapture},
+    capture::{CaptureSource, KmsCapture, KmsCaptureOptions, TestPatternCapture},
     cli::{CaptureMethod, Cli, HyperionTransport},
 };
 
@@ -66,10 +66,13 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut source: Box<dyn CaptureSource> = match cli.capture {
-        CaptureMethod::Kms => Box::new(match cli.drm_connector.as_deref() {
-            Some(connector) => KmsCapture::open_connector(cli.drm_device, Some(connector))?,
-            None => KmsCapture::open(cli.drm_device)?,
-        }),
+        CaptureMethod::Kms => Box::new(KmsCapture::open_with_options(
+            cli.drm_device,
+            KmsCaptureOptions {
+                connector: cli.drm_connector,
+                max_output_height: cli.output_height,
+            },
+        )?),
         CaptureMethod::TestPattern => Box::new(TestPatternCapture::new(cli.width, cli.height)),
     };
 
@@ -78,6 +81,7 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         u32::try_from(frame_interval.as_millis().saturating_mul(3)).unwrap_or(u32::MAX);
     let mut ticker = interval(frame_interval);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut reported_dimensions = None;
     info!(fps = cli.fps, "capture pipeline started");
 
     loop {
@@ -98,6 +102,15 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
                 };
+                let dimensions = (frame.width(), frame.height());
+                if reported_dimensions != Some(dimensions) {
+                    info!(
+                        width = dimensions.0,
+                        height = dimensions.1,
+                        "capture output dimensions changed"
+                    );
+                    reported_dimensions = Some(dimensions);
+                }
                 if let Err(error) = publisher
                     .send_rgb8(frame.width(), frame.height(), frame.pixels(), duration_ms)
                     .await

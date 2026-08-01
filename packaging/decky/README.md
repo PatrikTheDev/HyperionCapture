@@ -25,8 +25,19 @@ bun run build
 The release ZIP must contain at least `dist/`, `main.py`, `py_modules/`,
 `plugin.json`, and the generated Flatpak bundle under `bin/`.
 
+The UI's current `running` status is process liveness. The Rust payload will be
+the source of truth for readiness once its local Unix status socket is added;
+the Python backend should proxy recent capture/publication state rather than
+interpreting `flatpak ps` as successful capture.
+
 After placing the generated Flatpak bundle in `bin/`, assemble that ZIP with:
 
 ```sh
 ./build-package.sh
 ```
+
+Pushing a `v<version>` tag runs `.github/workflows/release.yml`. The tag must
+match both the Cargo workspace version and `package.json`; the workflow builds
+the Flatpak from the tagged tree, assembles `HyperionCapture.zip`, generates
+`SHA256SUMS`, and attaches the archive, standalone Flatpak, and checksums to the
+GitHub release. The tag must also match the Flatpak AppStream release version.

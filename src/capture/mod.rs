@@ -3,7 +3,7 @@ mod kms;
 mod test_pattern;
 
 pub use frame::Frame;
-pub use kms::KmsCapture;
+pub use kms::{KmsCapture, KmsCaptureOptions};
 pub use test_pattern::TestPatternCapture;
 
 /// A source of packed RGB8 frames.

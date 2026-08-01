@@ -6,6 +6,10 @@ static permissions expose DRM and the network, but they do not grant the
 Decky plugin launches the system installation through a trusted setuid copy of
 the host's `bwrap`, following Decky Sunshine's working model.
 
+The payload uses GBM, EGL, and OpenGL ES 2 from the Freedesktop runtime. GPU
+downscaling and HDR-to-SDR tone mapping happen before the 480p RGB8 readback, so
+the Flatpak does not transport native-resolution scanout frames to Hyperion.
+
 Generate the Cargo source list with the upstream `flatpak-cargo-generator.py`:
 
 ```sh

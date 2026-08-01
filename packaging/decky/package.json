@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "rollup -c",
+    "build": "tsc --noEmit && rollup -c",
     "watch": "rollup -c -w"
   },
   "devDependencies": {
@@ -13,7 +13,8 @@
     "@types/react": "19.1.1",
     "@types/react-dom": "19.1.1",
     "rollup": "^4.53.3",
-    "typescript": "^5.6.2"
+    "rollup-plugin-esbuild": "6.2.1",
+    "typescript": "5.6.2"
   },
   "dependencies": {
     "@decky/api": "^1.1.3",

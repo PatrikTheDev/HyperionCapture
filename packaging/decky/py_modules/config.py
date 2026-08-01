@@ -29,6 +29,7 @@ class CaptureConfig:
     flatbuffer_port: int = 19400
     priority: int = 150
     fps: int = 20
+    output_height: int = 480
     drm_device: str = "/dev/dri/card0"
     drm_connector: str = ""
     auto_start: bool = True
@@ -47,6 +48,9 @@ class CaptureConfig:
             ),
             priority=_integer(value.get("priority", cls.priority), "Priority"),
             fps=_integer(value.get("fps", cls.fps), "FPS"),
+            output_height=_integer(
+                value.get("output_height", cls.output_height), "Output height"
+            ),
             drm_device=str(value.get("drm_device", cls.drm_device)).strip(),
             drm_connector=str(value.get("drm_connector", cls.drm_connector)).strip(),
             auto_start=auto_start,
@@ -70,6 +74,8 @@ class CaptureConfig:
             raise ValueError("FlatBuffers priority must be between 100 and 199")
         if not 1 <= self.fps <= 120:
             raise ValueError("FPS must be between 1 and 120")
+        if not 1 <= self.output_height <= 4320:
+            raise ValueError("Output height must be between 1 and 4320")
         if not _DRM_DEVICE.fullmatch(self.drm_device):
             raise ValueError("DRM device must look like /dev/dri/card0")
         if self.drm_connector and not _DRM_CONNECTOR.fullmatch(self.drm_connector):
@@ -94,6 +100,8 @@ class CaptureConfig:
             str(self.priority),
             "--fps",
             str(self.fps),
+            "--output-height",
+            str(self.output_height),
             "--drm-device",
             self.drm_device,
         ]

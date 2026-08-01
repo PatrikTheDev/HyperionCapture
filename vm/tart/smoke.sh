@@ -97,4 +97,9 @@ if (( capture_status != 124 && capture_status != 130 )); then
     exit 1
 fi
 
-echo "KMS backend remained healthy for the 8-second capture window."
+if ! grep -Eq 'width.*854.*height.*480' "${capture_log}"; then
+    echo "error: live KMS probe did not report the expected 854x480 GPU-scaled output" >&2
+    exit 1
+fi
+
+echo "KMS backend produced 854x480 frames for the 8-second capture window."

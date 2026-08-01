@@ -15,7 +15,7 @@ jobs:
       - name: Install Linux graphics build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes libegl1-mesa-dev libgbm-dev libgl1-mesa-dev
+          sudo apt-get install --yes libegl1-mesa-dev libgbm-dev libgles2-mesa-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy,rustfmt

@@ -58,6 +58,15 @@ pub struct Cli {
     #[arg(long)]
     pub drm_connector: Option<String>,
 
+    /// Maximum KMS output height after GPU scaling; aspect ratio is preserved.
+    #[arg(
+        long,
+        env = "HYPERION_OUTPUT_HEIGHT",
+        default_value = "480",
+        value_parser = clap::value_parser!(u32).range(1..=4320)
+    )]
+    pub output_height: u32,
+
     /// Test-pattern width; only used with `--capture test-pattern`.
     #[arg(long, default_value = "320", value_parser = clap::value_parser!(u32).range(1..))]
     pub width: u32,

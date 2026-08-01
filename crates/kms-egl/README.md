@@ -3,7 +3,9 @@
 This is the workspace's deliberately isolated low-level graphics crate. It is
 the only crate allowed to contain unsafe Rust. Its safe API imports DRM
 framebuffer DMA-BUF planes with `EGL_EXT_image_dma_buf_import`, binds the image
-to an OpenGL texture, and reads normalized RGBA pixels back through OpenGL.
+to an OpenGL ES 2 texture, downsamples through a shader into a small RGB8 output,
+and reads back only that output. The shader averages in linear light and
+tone-maps PQ or HLG BT.2020 scanout into SDR BT.709 for Hyperion.
 
 Safety invariants:
 

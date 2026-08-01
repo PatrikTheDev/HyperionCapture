@@ -15,6 +15,7 @@ type CaptureConfig = {
   flatbuffer_port: number;
   priority: number;
   fps: number;
+  output_height: number;
   drm_device: string;
   drm_connector: string;
   auto_start: boolean;
@@ -34,6 +35,7 @@ const defaults: CaptureConfig = {
   flatbuffer_port: 19400,
   priority: 150,
   fps: 20,
+  output_height: 480,
   drm_device: "/dev/dri/card0",
   drm_connector: "",
   auto_start: true,
@@ -128,6 +130,13 @@ function Content() {
             label="Frames per second"
             value={String(config.fps)}
             onChange={(event) => setConfig({ ...config, fps: Number(event.target.value) })}
+          />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <TextField
+            label="Maximum output height"
+            value={String(config.output_height)}
+            onChange={(event) => setConfig({ ...config, output_height: Number(event.target.value) })}
           />
         </PanelSectionRow>
         <PanelSectionRow>
