@@ -1,0 +1,42 @@
+[Unit]
+Description=Hyperion Capture DRM/KMS service
+Documentation=https://github.com/PatrikTheDev/HyperionCapture
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/patrikthedev/hyperion-capture:latest
+ContainerName=hyperion-capture
+Pull=newer
+
+# GETFB2 checks CAP_SYS_ADMIN in the host user namespace. This must be a
+# rootful system Quadlet; a rootless user namespace cannot provide it.
+UserNS=host
+DropCapability=all
+AddCapability=CAP_SYS_ADMIN
+
+# Keep this path in sync with HYPERION_DRM_DEVICE in podman.env. Pass only the
+# card being captured; the application does not require a render node.
+AddDevice=/dev/dri/card0:/dev/dri/card0:rw
+# The installer replaces this Debian default with the selected host node's
+# numeric group. Device cgroup access does not bypass the node's Unix mode.
+GroupAdd=44
+
+EnvironmentFile=/etc/hyperion-capture/podman.env
+ReadOnly=true
+ReadOnlyTmpfs=true
+RunInit=true
+LogDriver=journald
+PidsLimit=128
+
+# Do not set NoNewPrivileges=true: the non-root executable intentionally uses
+# its cap_sys_admin file capability, constrained by the bounding set above.
+Exec=--capture kms
+
+[Service]
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

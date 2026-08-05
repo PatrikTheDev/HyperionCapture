@@ -39,23 +39,38 @@ pub struct Cli {
     pub priority: u16,
 
     /// Capture frames per second. The JSON image fallback supports at most 25.
-    #[arg(long, default_value = "20", value_parser = clap::value_parser!(u16).range(1..=120))]
+    #[arg(
+        long,
+        env = "HYPERION_FPS",
+        default_value = "20",
+        value_parser = clap::value_parser!(u16).range(1..=120)
+    )]
     pub fps: u16,
 
     /// JPEG quality used only by the JSON image transport.
-    #[arg(long, default_value = "85", value_parser = clap::value_parser!(u8).range(1..=100))]
+    #[arg(
+        long,
+        env = "HYPERION_JPEG_QUALITY",
+        default_value = "85",
+        value_parser = clap::value_parser!(u8).range(1..=100)
+    )]
     pub jpeg_quality: u8,
 
     /// Capture source.
-    #[arg(long, value_enum, default_value_t = CaptureMethod::Kms)]
+    #[arg(
+        long,
+        env = "HYPERION_CAPTURE",
+        value_enum,
+        default_value_t = CaptureMethod::Kms
+    )]
     pub capture: CaptureMethod,
 
     /// DRM card to capture, such as /dev/dri/card0.
-    #[arg(long, default_value = "/dev/dri/card0")]
+    #[arg(long, env = "HYPERION_DRM_DEVICE", default_value = "/dev/dri/card0")]
     pub drm_device: String,
 
     /// DRM connector to capture, such as DP-1; defaults to the first active output.
-    #[arg(long)]
+    #[arg(long, env = "HYPERION_DRM_CONNECTOR")]
     pub drm_connector: Option<String>,
 
     /// Maximum KMS output height after GPU scaling; aspect ratio is preserved.

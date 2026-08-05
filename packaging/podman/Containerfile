@@ -1,0 +1,57 @@
+ARG RUST_VERSION=1.85
+FROM docker.io/library/rust:${RUST_VERSION}-bookworm AS builder
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends \
+        libegl1-mesa-dev \
+        libgbm-dev \
+        libgles2-mesa-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /source
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY src ./src
+
+RUN cargo build --locked --release --bin hyperion-capture
+
+FROM docker.io/library/debian:13-slim
+
+ARG VERSION=dev
+ARG SOURCE_REVISION=unknown
+
+LABEL org.opencontainers.image.title="Hyperion Capture" \
+      org.opencontainers.image.description="Direct DRM/KMS capture input for Hyperion" \
+      org.opencontainers.image.source="https://github.com/PatrikTheDev/HyperionCapture" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${SOURCE_REVISION}"
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends \
+        ca-certificates \
+        libcap2-bin \
+        libdrm2 \
+        libegl1 \
+        libgbm1 \
+        libgl1-mesa-dri \
+        libgles2 \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 65532 hyperion-capture \
+    && useradd --uid 65532 --gid 65532 --no-create-home \
+        --home-dir /nonexistent --shell /usr/sbin/nologin hyperion-capture
+
+COPY --from=builder /source/target/release/hyperion-capture /usr/local/bin/hyperion-capture
+
+# GETFB2 only returns scanout GEM handles to DRM master or CAP_SYS_ADMIN. Keep
+# that capability on this immutable executable while running the service as a
+# non-root UID. The Quadlet must also retain CAP_SYS_ADMIN in the OCI bounding
+# set. Hyperion Capture drops it from the effective set between framebuffer
+# queries.
+RUN setcap cap_sys_admin=ep /usr/local/bin/hyperion-capture \
+    && test "$(getcap /usr/local/bin/hyperion-capture)" = \
+        "/usr/local/bin/hyperion-capture cap_sys_admin=ep"
+
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/hyperion-capture"]
+CMD ["--capture", "kms"]

@@ -38,6 +38,7 @@ After placing the generated Flatpak bundle in `bin/`, assemble that ZIP with:
 
 Pushing a `v<version>` tag runs `.github/workflows/release.yml`. The tag must
 match both the Cargo workspace version and `package.json`; the workflow builds
-the Flatpak from the tagged tree, assembles `HyperionCapture.zip`, generates
-`SHA256SUMS`, and attaches the archive, standalone Flatpak, and checksums to the
-GitHub release. The tag must also match the Flatpak AppStream release version.
+the Flatpak from the tagged tree, assembles `HyperionCapture.zip`, publishes the
+Podman-compatible OCI image, generates the Podman setup archive and
+`SHA256SUMS`, and attaches all downloadable artifacts to the GitHub release. The
+tag must also match the Flatpak AppStream release version.

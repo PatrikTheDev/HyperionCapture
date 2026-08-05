@@ -19,6 +19,10 @@ decky-build:
 decky-package:
     packaging/decky/build-package.sh
 
+# Build the production OCI image used by the rootful Podman deployment.
+podman-build:
+    podman build --file packaging/podman/Containerfile --tag localhost/hyperion-capture:dev .
+
 run *args:
     cargo run -- {{args}}
 

@@ -35,3 +35,23 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun run build
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Podman-compatible image
+        run: |
+          docker build \
+            --file packaging/podman/Containerfile \
+            --tag hyperion-capture:ci \
+            .
+      - name: Verify non-root user and framebuffer capability
+        run: |
+          test "$(docker image inspect --format '{{.Config.User}}' hyperion-capture:ci)" = "65532:65532"
+          test "$(docker run --rm --entrypoint /usr/sbin/getcap hyperion-capture:ci /usr/local/bin/hyperion-capture)" = "/usr/local/bin/hyperion-capture cap_sys_admin=ep"
+          docker run --rm \
+            --cap-drop=all \
+            --cap-add=SYS_ADMIN \
+            hyperion-capture:ci \
+            --help

@@ -42,11 +42,13 @@ cargo run -- \
   --hyperion-url http://hyperion.local:8090/
 ```
 
-Configuration is available through flags and the `HYPERION_URL`,
-`HYPERION_TRANSPORT`, `HYPERION_PRIORITY`, and `HYPERION_OUTPUT_HEIGHT`
-environment variables. The host
-from `HYPERION_URL` is also used for FlatBuffers; its port can be changed with
-`HYPERION_FLATBUFFER_PORT`.
+Configuration is available through flags and environment variables. The
+deployment-oriented variables are `HYPERION_URL`, `HYPERION_TOKEN`,
+`HYPERION_TRANSPORT`, `HYPERION_FLATBUFFER_PORT`, `HYPERION_PRIORITY`,
+`HYPERION_FPS`, `HYPERION_JPEG_QUALITY`, `HYPERION_CAPTURE`,
+`HYPERION_DRM_DEVICE`, `HYPERION_DRM_CONNECTOR`, and
+`HYPERION_OUTPUT_HEIGHT`. The host from `HYPERION_URL` is also used for
+FlatBuffers.
 
 To use the retained HTTP image transport:
 
@@ -145,24 +147,80 @@ reapplied, while unusual primary-plane source crops remain future shader-UV
 work. Hardware cursor and overlay planes are not included, which is appropriate
 for ambient lighting but should be revisited for general-purpose screenshots.
 
-## SteamOS packaging
+## Distribution
 
-The initial SteamOS distribution is a system Flatpak controlled by a companion
-root Decky plugin. The Flatpak provides an immutable, updateable payload and a
-matching graphics runtime. The Decky backend supplies the host-side privileged
-`bwrap` required for KMS framebuffer export, supervises the process, and exposes
-configuration in Game Mode. Both packages live in this repository so releases
-cannot accidentally pair incompatible versions.
+Tagged releases provide two supported deployments and one reusable payload:
+
+| Artifact | Intended use | Privileged boundary |
+| --- | --- | --- |
+| `HyperionCapture.zip` | Recommended SteamOS installation through Decky | Root Decky backend and its trusted `bwrap` copy |
+| `ghcr.io/patrikthedev/hyperion-capture` plus `HyperionCapture-podman.tar.gz` | SteamOS or another systemd Linux host using rootful Podman | A narrowly configured system Quadlet |
+| `io.github.PatrikTheDev.HyperionCapture.flatpak` | Payload for Decky or another trusted host launcher | The Flatpak alone cannot obtain `CAP_SYS_ADMIN` |
+
+`SHA256SUMS` covers every downloadable release artifact. Cargo, Decky, and
+Flatpak versions must all match the release tag. The OCI image is published for
+`linux/amd64` and `linux/arm64` with full-version tags, a moving major/minor tag,
+and `latest`.
+
+### Decky and Flatpak
+
+This is the integrated SteamOS distribution. The system Flatpak provides an
+immutable payload and matching Freedesktop graphics runtime. Its companion root
+Decky plugin installs that exact bundle, supplies the host-side privileged
+`bwrap` needed for framebuffer export, supervises the process, and exposes its
+configuration in Game Mode. Keeping the payload and launcher in one release
+prevents incompatible versions from being paired accidentally.
+
+Install `HyperionCapture.zip` through Decky's plugin installer. The embedded
+Flatpak is installed and updated by the plugin; installing the standalone
+`.flatpak` release asset is only useful for development or a custom privileged
+launcher. An ordinary `flatpak run` can see `/dev/dri` but cannot obtain the
+host `CAP_SYS_ADMIN` required by `GETFB2`.
 
 See [`packaging/flatpak`](packaging/flatpak/README.md) for the Flatpak build and
-[`packaging/decky`](packaging/decky/README.md) for the launcher security model
-and plugin bundle layout.
+[`packaging/decky`](packaging/decky/README.md) for the launcher security model,
+plugin lifecycle, and archive layout.
 
-The Decky UI exposes the 480-pixel maximum output height and the tagged release
-workflow builds the system Flatpak, embeds it into `HyperionCapture.zip`, writes
-checksums, and attaches the Decky archive and standalone Flatpak bundle to the
-matching GitHub release. Tag, Cargo, Decky, and Flatpak metadata versions must
-match.
+### Podman
+
+The Podman distribution is a non-root OCI image plus a rootful system Quadlet.
+It is suitable when Decky integration is unnecessary or the service should be
+managed directly through systemd. The image ships a Mesa GBM/EGL/GLES runtime
+and gives only the immutable capture executable the `cap_sys_admin` file
+capability. The Quadlet exposes one DRM primary node, drops all other container
+capabilities, uses a read-only root filesystem, and runs as UID/GID 65532.
+
+Download and extract `HyperionCapture-podman.tar.gz`, then install it:
+
+```sh
+tar -xzf HyperionCapture-podman.tar.gz
+sudo ./install.sh /dev/dri/card0
+sudoedit /etc/hyperion-capture/podman.env
+sudo systemctl start hyperion-capture.service
+sudo journalctl -u hyperion-capture.service -f
+```
+
+The host must use cgroup v2 and a Podman version with Quadlet support. This is
+intentionally a rootful service: rootless Podman's namespaced capability does
+not satisfy the kernel's framebuffer-handle check. Do not add `--privileged`.
+
+SteamOS may assign AMDGPU a card other than `/dev/dri/card0`. Inspect
+`/dev/dri` and `/sys/class/drm/card*-*/status`, then pass the card that owns the
+active connector to `install.sh`. The installer exposes only that node and adds
+its numeric owning group to the non-root container process. If Hyperion runs on
+the same host, remember that `127.0.0.1` inside the default container network is
+the container itself; use a host-reachable address.
+
+To build the image locally instead of pulling it:
+
+```sh
+just podman-build
+```
+
+Then replace the Quadlet's `Image=` with
+`localhost/hyperion-capture:dev` and set `Pull=never`. Complete build, direct
+`podman run`, security, logging, and troubleshooting instructions are in
+[`packaging/podman`](packaging/podman/README.md).
 
 ### Health and readiness ownership
 
