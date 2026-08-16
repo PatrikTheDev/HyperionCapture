@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import decky
+from command_env import system_command_environment
 from config import CaptureConfig
 
 APP_ID = "io.github.PatrikTheDev.HyperionCapture"
@@ -121,7 +122,7 @@ class Plugin:
             return False
 
         config = self._load_config()
-        environment = os.environ.copy()
+        environment = system_command_environment()
         environment["FLATPAK_BWRAP"] = str(BWRAP_PATH)
         command = ["flatpak", "run", "--system", APP_ID, *config.capture_args()]
         log_path = Path(decky.DECKY_PLUGIN_LOG_DIR) / "capture.log"
@@ -241,7 +242,11 @@ class Plugin:
     ) -> subprocess.CompletedProcess[str] | None:
         try:
             result = subprocess.run(
-                command, capture_output=True, text=True, check=False
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+                env=system_command_environment(),
             )
         except OSError as error:
             if record_error:

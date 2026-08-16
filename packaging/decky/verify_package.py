@@ -14,6 +14,7 @@ REQUIRED_FILES = {
     "package.json",
     "plugin.json",
     "py_modules/__init__.py",
+    "py_modules/command_env.py",
     "py_modules/config.py",
 }
 
