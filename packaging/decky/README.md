@@ -22,8 +22,10 @@ bun install
 bun run build
 ```
 
-The release ZIP must contain at least `dist/`, `main.py`, `py_modules/`,
-`plugin.json`, and the generated Flatpak bundle under `bin/`.
+The release ZIP contains a single `HyperionCapture/` directory. That directory
+must contain at least `dist/`, `main.py`, `py_modules/`, `package.json`,
+`plugin.json`, and the generated Flatpak bundle under `bin/`. The packaging
+script validates this Decky-compatible layout before publishing the archive.
 
 The UI's current `running` status is process liveness. The Rust payload will be
 the source of truth for readiness once its local Unix status socket is added;
