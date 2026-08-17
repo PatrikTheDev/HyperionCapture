@@ -26,6 +26,7 @@ class Plugin:
 
     def __init__(self) -> None:
         self._config_path = Path(decky.DECKY_PLUGIN_SETTINGS_DIR) / "config.json"
+        self._package_path = Path(decky.DECKY_PLUGIN_DIR) / "package.json"
         self._bundle_path = Path(decky.DECKY_PLUGIN_DIR) / "bin" / f"{APP_ID}.flatpak"
         self._last_error = ""
         self._operation_lock = asyncio.Lock()
@@ -164,11 +165,31 @@ class Plugin:
 
     def _is_installed(self) -> bool:
         result = self._run(
-            ["flatpak", "list", "--system", "--app", "--columns=application"],
+            ["flatpak", "info", "--system", APP_ID],
             "checking the Flatpak installation",
             record_error=False,
         )
-        return result is not None and APP_ID in result.stdout.splitlines()
+        return result is not None
+
+    def _installed_version(self) -> str | None:
+        result = self._run(
+            ["flatpak", "info", "--system", "--show-version", APP_ID],
+            "checking the installed Flatpak version",
+            record_error=False,
+        )
+        if result is None:
+            return None
+        version = result.stdout.strip()
+        return version or None
+
+    def _bundled_version(self) -> str | None:
+        try:
+            with self._package_path.open(encoding="utf-8") as file:
+                value = json.load(file)
+            version = value.get("version")
+            return version.strip() if isinstance(version, str) and version.strip() else None
+        except (json.JSONDecodeError, OSError, AttributeError):
+            return None
 
     def _is_running(self) -> bool:
         result = self._run(
@@ -179,24 +200,33 @@ class Plugin:
         return result is not None and APP_ID in result.stdout.splitlines()
 
     def _ensure_installed(self) -> bool:
-        if not self._bundle_path.is_file():
-            if self._is_installed():
-                # Useful for development installs. Published plugin archives
-                # always include the bundle so plugin and payload stay paired.
+        installed = self._is_installed()
+        if installed:
+            installed_version = self._installed_version()
+            bundled_version = self._bundled_version()
+            if (
+                installed_version is None
+                or bundled_version is None
+                or installed_version == bundled_version
+            ):
                 return True
+
+        if not self._bundle_path.is_file():
             self._last_error = f"Bundled Flatpak is missing at {self._bundle_path}"
             decky.logger.error(self._last_error)
             return False
+
+        install_options = ["--reinstall"] if installed else []
         result = self._run(
             [
                 "flatpak",
                 "install",
                 "--system",
                 "--noninteractive",
-                "--or-update",
+                *install_options,
                 str(self._bundle_path),
             ],
-            "installing the bundled Flatpak",
+            "updating the bundled Flatpak" if installed else "installing the bundled Flatpak",
         )
         return result is not None
 
