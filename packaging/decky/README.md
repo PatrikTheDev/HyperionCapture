@@ -34,6 +34,11 @@ this status automatically and surfaces the latest useful error. A future local
 Unix status socket can replace this log-based health signal with explicit frame
 delivery acknowledgements.
 
+The backend reads the installed payload version with SteamOS's supported
+`flatpak list --columns=application,version` interface and compares it with the
+Decky package version. A mismatch triggers a reinstall from the bundled Flatpak,
+and a running old deployment is stopped before the replacement is launched.
+
 After placing the generated Flatpak bundle in `bin/`, assemble that ZIP with:
 
 ```sh

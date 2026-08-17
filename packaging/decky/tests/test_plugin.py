@@ -66,11 +66,43 @@ class PluginInstallationTests(unittest.TestCase):
         with (
             patch.object(self.plugin, "_is_installed", return_value=True),
             patch.object(self.plugin, "_installed_version", return_value="0.0.4"),
+            patch.object(self.plugin, "_is_running", return_value=False),
             patch.object(self.plugin, "_run", return_value=completed) as run,
         ):
             self.assertTrue(self.plugin._ensure_installed())
 
         self.assertIn("--reinstall", run.call_args.args[0])
+
+    def test_refuses_to_guess_when_installed_version_probe_fails(self) -> None:
+        with (
+            patch.object(self.plugin, "_is_installed", return_value=True),
+            patch.object(self.plugin, "_installed_version", return_value=None),
+            patch.object(self.plugin, "_run") as run,
+        ):
+            self.assertFalse(self.plugin._ensure_installed())
+
+        run.assert_not_called()
+        self.assertEqual(
+            self.plugin._last_error,
+            "Could not determine the installed Flatpak version",
+        )
+
+    def test_installed_version_uses_steamos_supported_flatpak_list(self) -> None:
+        output = f"org.example.Other  9.9\n{_MODULE.APP_ID}  0.0.4\n"
+        completed = subprocess.CompletedProcess([], 0, output, "")
+        with patch.object(self.plugin, "_run", return_value=completed) as run:
+            self.assertEqual(self.plugin._installed_version(), "0.0.4")
+
+        self.assertEqual(
+            run.call_args.args[0],
+            [
+                "flatpak",
+                "list",
+                "--system",
+                "--app",
+                "--columns=application,version",
+            ],
+        )
 
     def test_installed_probe_uses_flatpak_info(self) -> None:
         completed = subprocess.CompletedProcess([], 0, "", "")

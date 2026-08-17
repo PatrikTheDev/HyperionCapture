@@ -186,17 +186,6 @@ class Plugin:
         )
         return result is not None
 
-    def _installed_version(self) -> str | None:
-        result = self._run(
-            ["flatpak", "info", "--system", "--show-version", APP_ID],
-            "checking the installed Flatpak version",
-            record_error=False,
-        )
-        if result is None:
-            return None
-        version = result.stdout.strip()
-        return version or None
-
     def _bundled_version(self) -> str | None:
         try:
             with self._package_path.open(encoding="utf-8") as file:
@@ -205,6 +194,26 @@ class Plugin:
             return version.strip() if isinstance(version, str) and version.strip() else None
         except (json.JSONDecodeError, OSError, AttributeError):
             return None
+
+    def _installed_version(self) -> str | None:
+        result = self._run(
+            [
+                "flatpak",
+                "list",
+                "--system",
+                "--app",
+                "--columns=application,version",
+            ],
+            "checking the installed Flatpak version",
+            record_error=False,
+        )
+        if result is None:
+            return None
+        for line in result.stdout.splitlines():
+            columns = line.split(maxsplit=1)
+            if columns and columns[0] == APP_ID:
+                return columns[1].strip() if len(columns) == 2 else None
+        return None
 
     def _is_running(self) -> bool:
         result = self._run(
@@ -246,19 +255,28 @@ class Plugin:
 
     def _ensure_installed(self) -> bool:
         installed = self._is_installed()
+        bundled_version = self._bundled_version()
+        if bundled_version is None:
+            self._last_error = "Could not determine the bundled payload version"
+            decky.logger.error(self._last_error)
+            return False
         if installed:
             installed_version = self._installed_version()
-            bundled_version = self._bundled_version()
-            if (
-                installed_version is None
-                or bundled_version is None
-                or installed_version == bundled_version
-            ):
+            if installed_version is None:
+                self._last_error = "Could not determine the installed Flatpak version"
+                decky.logger.error(self._last_error)
+                return False
+            if installed_version == bundled_version:
                 return True
 
         if not self._bundle_path.is_file():
             self._last_error = f"Bundled Flatpak is missing at {self._bundle_path}"
             decky.logger.error(self._last_error)
+            return False
+
+        # A running Flatpak keeps executing its old deployment after an update.
+        # Stop it before reinstalling so this start launches the new payload.
+        if installed and self._is_running() and not self._stop():
             return False
 
         install_options = ["--reinstall"] if installed else []
