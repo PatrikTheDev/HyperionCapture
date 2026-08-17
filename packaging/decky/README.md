@@ -27,10 +27,12 @@ must contain at least `dist/`, `main.py`, `py_modules/`, `package.json`,
 `plugin.json`, and the generated Flatpak bundle under `bin/`. The packaging
 script validates this Decky-compatible layout before publishing the archive.
 
-The UI's current `running` status is process liveness. The Rust payload will be
-the source of truth for readiness once its local Unix status socket is added;
-the Python backend should proxy recent capture/publication state rather than
-interpreting `flatpak ps` as successful capture.
+The backend reports Flatpak process liveness separately from capture health.
+While the payload is running, it watches the bounded tail of `capture.log` for
+repeated, current capture or publication failures. The Game Mode UI refreshes
+this status automatically and surfaces the latest useful error. A future local
+Unix status socket can replace this log-based health signal with explicit frame
+delivery acknowledgements.
 
 After placing the generated Flatpak bundle in `bin/`, assemble that ZIP with:
 

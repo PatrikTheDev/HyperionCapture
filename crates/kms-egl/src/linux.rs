@@ -35,8 +35,36 @@ const EGL_LINUX_DRM_FOURCC_EXT: EglInt = 0x3271;
 const EGL_DMA_BUF_PLANE0_FD_EXT: EglInt = 0x3272;
 const EGL_DMA_BUF_PLANE0_OFFSET_EXT: EglInt = 0x3273;
 const EGL_DMA_BUF_PLANE0_PITCH_EXT: EglInt = 0x3274;
+const EGL_DMA_BUF_PLANE1_FD_EXT: EglInt = 0x3275;
+const EGL_DMA_BUF_PLANE1_OFFSET_EXT: EglInt = 0x3276;
+const EGL_DMA_BUF_PLANE1_PITCH_EXT: EglInt = 0x3277;
+const EGL_DMA_BUF_PLANE2_FD_EXT: EglInt = 0x3278;
+const EGL_DMA_BUF_PLANE2_OFFSET_EXT: EglInt = 0x3279;
+const EGL_DMA_BUF_PLANE2_PITCH_EXT: EglInt = 0x327a;
+const EGL_DMA_BUF_PLANE3_FD_EXT: EglInt = 0x3440;
+const EGL_DMA_BUF_PLANE3_OFFSET_EXT: EglInt = 0x3441;
+const EGL_DMA_BUF_PLANE3_PITCH_EXT: EglInt = 0x3442;
 const EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT: EglInt = 0x3443;
 const EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT: EglInt = 0x3444;
+
+const EGL_DMA_BUF_PLANE_FD_EXT: [EglInt; 4] = [
+    EGL_DMA_BUF_PLANE0_FD_EXT,
+    EGL_DMA_BUF_PLANE1_FD_EXT,
+    EGL_DMA_BUF_PLANE2_FD_EXT,
+    EGL_DMA_BUF_PLANE3_FD_EXT,
+];
+const EGL_DMA_BUF_PLANE_OFFSET_EXT: [EglInt; 4] = [
+    EGL_DMA_BUF_PLANE0_OFFSET_EXT,
+    EGL_DMA_BUF_PLANE1_OFFSET_EXT,
+    EGL_DMA_BUF_PLANE2_OFFSET_EXT,
+    EGL_DMA_BUF_PLANE3_OFFSET_EXT,
+];
+const EGL_DMA_BUF_PLANE_PITCH_EXT: [EglInt; 4] = [
+    EGL_DMA_BUF_PLANE0_PITCH_EXT,
+    EGL_DMA_BUF_PLANE1_PITCH_EXT,
+    EGL_DMA_BUF_PLANE2_PITCH_EXT,
+    EGL_DMA_BUF_PLANE3_PITCH_EXT,
+];
 
 const GL_TEXTURE_2D: c_uint = 0x0DE1;
 const GL_TEXTURE0: c_uint = 0x84C0;
@@ -780,10 +808,11 @@ fn scaled_dimensions(width: u32, height: u32, max_height: u32) -> Result<(u32, u
 fn validate_rgb_texture(frame: &DmaBufFrame<'_>) -> Result<(), Error> {
     // The values are the DRM FourCC encodings of XR24, AR24, XB24, AB24,
     // XR30, AR30, XB30, and AB30. These are RGB textures that EGL can expose
-    // as GL_TEXTURE_2D. Multi-plane YUV needs GL_TEXTURE_EXTERNAL_OES plus a
-    // color-range/matrix description, so accepting it here would silently
-    // produce incorrect colors. The API keeps the FourCC and plane list intact
-    // so that path can be added without changing the KMS boundary.
+    // as GL_TEXTURE_2D. A modifier may add auxiliary planes (for example AMD
+    // DCC compression metadata) to an otherwise packed RGB format, so the
+    // FourCC rather than the plane count determines whether this shader path is
+    // valid. Multi-plane YUV still fails the allow-list below; supporting it
+    // requires GL_TEXTURE_EXTERNAL_OES plus a color-range/matrix description.
     const SUPPORTED: [u32; 8] = [
         0x3432_5258,
         0x3432_5241,
@@ -794,12 +823,6 @@ fn validate_rgb_texture(frame: &DmaBufFrame<'_>) -> Result<(), Error> {
         0x3033_4258,
         0x3033_4241,
     ];
-    if frame.planes.len() != 1 {
-        return Err(Error(format!(
-            "multi-plane DMA-BUF format 0x{:08x} is not supported yet; RGB scanout must contain exactly one plane",
-            frame.fourcc
-        )));
-    }
     if !SUPPORTED.contains(&frame.fourcc) {
         return Err(Error(format!(
             "DRM format 0x{:08x} is not a supported RGB8/RGB10 scanout format",
@@ -1151,14 +1174,12 @@ fn build_attributes(
         EglInt::from_ne_bytes(frame.fourcc.to_ne_bytes()),
     ];
     for (index, plane) in frame.planes.iter().enumerate() {
-        let index = EglInt::try_from(index)
-            .map_err(|error| Error(format!("invalid plane index: {error}")))?;
         attributes.extend_from_slice(&[
-            EGL_DMA_BUF_PLANE0_FD_EXT + index * 3,
+            EGL_DMA_BUF_PLANE_FD_EXT[index],
             plane.fd.as_raw_fd(),
-            EGL_DMA_BUF_PLANE0_OFFSET_EXT + index * 3,
+            EGL_DMA_BUF_PLANE_OFFSET_EXT[index],
             to_egl_int(plane.offset, "plane offset")?,
-            EGL_DMA_BUF_PLANE0_PITCH_EXT + index * 3,
+            EGL_DMA_BUF_PLANE_PITCH_EXT[index],
             to_egl_int(plane.pitch, "plane pitch")?,
         ]);
         if let Some(modifier) = plane.modifier {
@@ -1166,6 +1187,8 @@ fn build_attributes(
                 .map_err(|error| Error(format!("invalid modifier low bits: {error}")))?;
             let high = u32::try_from(modifier >> 32)
                 .map_err(|error| Error(format!("invalid modifier high bits: {error}")))?;
+            let index = EglInt::try_from(index)
+                .map_err(|error| Error(format!("invalid plane index: {error}")))?;
             attributes.extend_from_slice(&[
                 EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT + index * 2,
                 EglInt::from_ne_bytes(low.to_ne_bytes()),
@@ -1212,8 +1235,8 @@ mod tests {
 
     use super::{
         DmaBufFrame, DmaBufPlane, EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT,
-        EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT, EGL_NONE, build_attributes, scaled_dimensions,
-        validate_rgb_texture,
+        EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT, EGL_DMA_BUF_PLANE1_FD_EXT, EGL_DMA_BUF_PLANE3_FD_EXT,
+        EGL_NONE, build_attributes, scaled_dimensions, validate_rgb_texture,
     };
 
     #[test]
@@ -1286,7 +1309,58 @@ mod tests {
     }
 
     #[test]
-    fn rejects_multi_plane_formats_before_egl_import() -> Result<(), Box<dyn std::error::Error>> {
+    fn accepts_modifier_defined_auxiliary_planes_for_rgb() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let file = File::open("/dev/null")?;
+        let planes = [
+            DmaBufPlane {
+                fd: file.as_fd(),
+                offset: 0,
+                pitch: 4,
+                modifier: Some(0x0200_0000_1866_7b04),
+            },
+            DmaBufPlane {
+                fd: file.as_fd(),
+                offset: 4,
+                pitch: 4,
+                modifier: Some(0x0200_0000_1866_7b04),
+            },
+        ];
+        let frame = DmaBufFrame {
+            width: 1,
+            height: 1,
+            fourcc: 0x3432_5241,
+            planes: &planes,
+        };
+        assert!(validate_rgb_texture(&frame).is_ok());
+        assert!(build_attributes(&frame, true)?.contains(&EGL_DMA_BUF_PLANE1_FD_EXT));
+        Ok(())
+    }
+
+    #[test]
+    fn uses_the_extension_token_for_a_fourth_plane() -> Result<(), Box<dyn std::error::Error>> {
+        let file = File::open("/dev/null")?;
+        let planes: [DmaBufPlane<'_>; 4] = std::array::from_fn(|index| DmaBufPlane {
+            fd: file.as_fd(),
+            offset: u32::try_from(index).unwrap_or_default(),
+            pitch: 4,
+            modifier: Some(0),
+        });
+        let attributes = build_attributes(
+            &DmaBufFrame {
+                width: 1,
+                height: 1,
+                fourcc: 0x3432_5241,
+                planes: &planes,
+            },
+            true,
+        )?;
+        assert!(attributes.contains(&EGL_DMA_BUF_PLANE3_FD_EXT));
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_multi_plane_yuv_before_egl_import() -> Result<(), Box<dyn std::error::Error>> {
         let file = File::open("/dev/null")?;
         let planes = [
             DmaBufPlane {
@@ -1305,10 +1379,10 @@ mod tests {
         let result = validate_rgb_texture(&DmaBufFrame {
             width: 1,
             height: 1,
-            fourcc: 0x3432_5258,
+            fourcc: 0x3231_564e,
             planes: &planes,
         });
-        assert!(result.is_err_and(|error| error.to_string().contains("multi-plane")));
+        assert!(result.is_err_and(|error| error.to_string().contains("not a supported")));
         Ok(())
     }
 }

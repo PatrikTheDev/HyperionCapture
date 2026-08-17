@@ -19,6 +19,13 @@ APP_ID = "io.github.PatrikTheDev.HyperionCapture"
 STATE_DIR = Path("/var/lib/decky-hyperion-capture")
 BWRAP_SOURCE = Path("/usr/bin/bwrap")
 BWRAP_PATH = STATE_DIR / "bwrap"
+FAILURE_MARKERS = (
+    "failed to capture frame",
+    "failed to publish frame",
+)
+FAILURE_REPEAT_COUNT = 3
+FAILURE_FRESHNESS_SECONDS = 5.0
+LOG_TAIL_BYTES = 64 * 1024
 
 
 class Plugin:
@@ -28,6 +35,7 @@ class Plugin:
         self._config_path = Path(decky.DECKY_PLUGIN_SETTINGS_DIR) / "config.json"
         self._package_path = Path(decky.DECKY_PLUGIN_DIR) / "package.json"
         self._bundle_path = Path(decky.DECKY_PLUGIN_DIR) / "bin" / f"{APP_ID}.flatpak"
+        self._log_path = Path(decky.DECKY_PLUGIN_LOG_DIR) / "capture.log"
         self._last_error = ""
         self._operation_lock = asyncio.Lock()
 
@@ -38,7 +46,15 @@ class Plugin:
             asyncio.to_thread(self._is_installed),
             asyncio.to_thread(self._is_running),
         )
-        return {"installed": installed, "running": running, "error": self._last_error}
+        capture_error = (
+            await asyncio.to_thread(self._recent_capture_error) if running else None
+        )
+        return {
+            "installed": installed,
+            "running": running,
+            "capturing": running and capture_error is None,
+            "error": capture_error or self._last_error,
+        }
 
     async def get_config(self) -> dict[str, Any]:
         """Return validated persisted configuration."""
@@ -126,11 +142,10 @@ class Plugin:
         environment = system_command_environment()
         environment["FLATPAK_BWRAP"] = str(BWRAP_PATH)
         command = ["flatpak", "run", "--system", APP_ID, *config.capture_args()]
-        log_path = Path(decky.DECKY_PLUGIN_LOG_DIR) / "capture.log"
 
         try:
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            with log_path.open("ab", buffering=0) as log_file:
+            self._log_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._log_path.open("wb", buffering=0) as log_file:
                 subprocess.Popen(
                     command,
                     env=environment,
@@ -198,6 +213,36 @@ class Plugin:
             record_error=False,
         )
         return result is not None and APP_ID in result.stdout.splitlines()
+
+    def _recent_capture_error(self) -> str | None:
+        """Return the latest error when the process is repeatedly failing.
+
+        The capture binary retries recoverable capture and publication errors
+        indefinitely. Those retries keep the process alive, so Flatpak process
+        state alone cannot indicate that frames are reaching Hyperion. Once the
+        log stops receiving failures, the error expires to allow recovery after
+        a DRM modeset or temporary network outage.
+        """
+
+        try:
+            log_stat = self._log_path.stat()
+            if time.time() - log_stat.st_mtime > FAILURE_FRESHNESS_SECONDS:
+                return None
+            with self._log_path.open("rb") as log_file:
+                log_file.seek(max(0, log_stat.st_size - LOG_TAIL_BYTES))
+                lines = log_file.read().decode("utf-8", errors="replace").splitlines()
+        except (OSError, ValueError):
+            return None
+
+        failures = [line for line in lines[-50:] if any(marker in line for marker in FAILURE_MARKERS)]
+        if len(failures) < FAILURE_REPEAT_COUNT:
+            return None
+
+        latest = failures[-1]
+        detail = latest.partition(" error=")[2].strip()
+        if not detail:
+            detail = next(marker for marker in FAILURE_MARKERS if marker in latest)
+        return f"Capture process is running but repeatedly failing: {detail}"
 
     def _ensure_installed(self) -> bool:
         installed = self._is_installed()

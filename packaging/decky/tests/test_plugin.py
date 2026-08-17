@@ -4,6 +4,7 @@ import importlib.util
 import subprocess
 import sys
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
@@ -34,6 +35,7 @@ class PluginInstallationTests(unittest.TestCase):
         self.plugin = _MODULE.Plugin()
         self.plugin._bundle_path = root / "capture.flatpak"
         self.plugin._package_path = root / "package.json"
+        self.plugin._log_path = root / "capture.log"
         self.plugin._bundle_path.touch()
         self.plugin._package_path.write_text('{"version":"0.0.5"}', encoding="utf-8")
 
@@ -79,6 +81,44 @@ class PluginInstallationTests(unittest.TestCase):
             run.call_args.args[0],
             ["flatpak", "info", "--system", _MODULE.APP_ID],
         )
+
+    def test_reports_repeated_recent_capture_failure(self) -> None:
+        error = "failed to capture frame; will re-enumerate and retry error=unsupported buffer"
+        self.plugin._log_path.write_text("\n".join([error] * 3), encoding="utf-8")
+
+        self.assertEqual(
+            self.plugin._recent_capture_error(),
+            "Capture process is running but repeatedly failing: unsupported buffer",
+        )
+
+    def test_ignores_a_single_transient_failure(self) -> None:
+        self.plugin._log_path.write_text(
+            "failed to publish frame error=connection reset\n", encoding="utf-8"
+        )
+
+        self.assertIsNone(self.plugin._recent_capture_error())
+
+    def test_capture_failure_expires_after_recovery(self) -> None:
+        error = "failed to publish frame error=connection reset"
+        self.plugin._log_path.write_text("\n".join([error] * 3), encoding="utf-8")
+        recovered_at = time.time() + _MODULE.FAILURE_FRESHNESS_SECONDS + 1
+        with patch.object(_MODULE.time, "time", return_value=recovered_at):
+            self.assertIsNone(self.plugin._recent_capture_error())
+
+
+class PluginStatusTests(unittest.IsolatedAsyncioTestCase):
+    async def test_running_failed_process_is_not_reported_as_capturing(self) -> None:
+        plugin = _MODULE.Plugin()
+        with (
+            patch.object(plugin, "_is_installed", return_value=True),
+            patch.object(plugin, "_is_running", return_value=True),
+            patch.object(plugin, "_recent_capture_error", return_value="capture failed"),
+        ):
+            status = await plugin.get_status()
+
+        self.assertTrue(status["running"])
+        self.assertFalse(status["capturing"])
+        self.assertEqual(status["error"], "capture failed")
 
 
 if __name__ == "__main__":

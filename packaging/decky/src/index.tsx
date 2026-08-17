@@ -21,7 +21,7 @@ type CaptureConfig = {
   auto_start: boolean;
 };
 
-type Status = { installed: boolean; running: boolean; error: string };
+type Status = { installed: boolean; running: boolean; capturing: boolean; error: string };
 type SaveResult = { ok: boolean; config: CaptureConfig | null; error: string };
 
 const getStatus = callable<[], Status>("get_status");
@@ -43,7 +43,12 @@ const defaults: CaptureConfig = {
 
 function Content() {
   const [config, setConfig] = useState<CaptureConfig>(defaults);
-  const [status, setStatus] = useState<Status>({ installed: false, running: false, error: "" });
+  const [status, setStatus] = useState<Status>({
+    installed: false,
+    running: false,
+    capturing: false,
+    error: "",
+  });
   const [busy, setBusy] = useState(false);
 
   const refresh = async () => setStatus(await getStatus());
@@ -53,6 +58,8 @@ function Content() {
       setConfig(loadedConfig);
       setStatus(loadedStatus);
     });
+    const refreshTimer = window.setInterval(() => void refresh(), 1500);
+    return () => window.clearInterval(refreshTimer);
   }, []);
 
   const save = async () => {
@@ -80,6 +87,13 @@ function Content() {
   return (
     <>
       <PanelSection title="Status">
+        <PanelSectionRow>
+          {status.capturing
+            ? "Capture active"
+            : status.running
+              ? "Capture process running, but no frames are being sent"
+              : "Capture stopped"}
+        </PanelSectionRow>
         <PanelSectionRow>
           <ButtonItem layout="below" disabled={busy} onClick={toggleCapture}>
             {status.running ? "Stop capture" : "Start capture"}
