@@ -38,6 +38,7 @@ class Plugin:
         self._log_path = Path(decky.DECKY_PLUGIN_LOG_DIR) / "capture.log"
         self._last_error = ""
         self._operation_lock = asyncio.Lock()
+        self._auto_start_pending = False
 
     async def get_status(self) -> dict[str, Any]:
         """Return the installation and process state for the frontend."""
@@ -83,23 +84,34 @@ class Plugin:
     async def stop_capture(self) -> bool:
         """Stop all running instances of the capture Flatpak."""
 
+        self._auto_start_pending = False
         async with self._operation_lock:
             return await asyncio.to_thread(self._stop)
 
     async def _main(self) -> None:
         decky.logger.info("Loading Hyperion Capture")
-        if self._load_config().auto_start:
-            async with self._operation_lock:
-                await asyncio.to_thread(self._start)
+        self._auto_start_pending = self._load_config().auto_start
+        while self._auto_start_pending:
+            if not self._load_config().auto_start:
+                break
+            if await asyncio.to_thread(self._gamescope_running):
+                async with self._operation_lock:
+                    if self._auto_start_pending:
+                        await asyncio.to_thread(self._start)
+                break
+            await asyncio.sleep(1)
+        self._auto_start_pending = False
 
     async def _unload(self) -> None:
         # The Flatpak deliberately survives a Decky reload. On the next load,
         # _main observes it and avoids starting a duplicate.
+        self._auto_start_pending = False
         decky.logger.info("Hyperion Capture plugin unloaded")
 
     async def _uninstall(self) -> None:
         # Decky may terminate an uninstall coroutine quickly, so keep cleanup
         # synchronous and bounded, like Decky Sunshine does.
+        self._auto_start_pending = False
         self._stop()
         try:
             if BWRAP_PATH.exists():
@@ -142,6 +154,13 @@ class Plugin:
         environment = system_command_environment()
         environment["FLATPAK_BWRAP"] = str(BWRAP_PATH)
         command = ["flatpak", "run", "--system", APP_ID, *config.capture_args()]
+
+        # Recheck after installation/preparation, which can outlast Gamescope.
+        # Process presence is an ordering gate, not proof of DRM ownership;
+        # the payload also immediately drops any implicit DRM master lock.
+        if not self._gamescope_running():
+            self._last_error = "Gamescope is not running; start capture after Game Mode starts"
+            return False
 
         try:
             self._log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -222,6 +241,13 @@ class Plugin:
             record_error=False,
         )
         return result is not None and APP_ID in result.stdout.splitlines()
+
+    def _gamescope_running(self) -> bool:
+        return self._run(
+            ["pgrep", "-x", "gamescope"],
+            "checking Gamescope startup",
+            record_error=False,
+        ) is not None
 
     def _recent_capture_error(self) -> str | None:
         """Return the latest error when the process is repeatedly failing.

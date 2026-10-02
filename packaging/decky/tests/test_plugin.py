@@ -153,5 +153,80 @@ class PluginStatusTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status["error"], "capture failed")
 
 
+class PluginStartupTests(unittest.IsolatedAsyncioTestCase):
+    async def test_auto_start_waits_for_gamescope(self) -> None:
+        plugin = _MODULE.Plugin()
+        with (
+            patch.object(plugin, "_load_config", return_value=_MODULE.CaptureConfig()),
+            patch.object(plugin, "_gamescope_running", side_effect=[False, False, True]),
+            patch.object(plugin, "_start", return_value=True) as start,
+            patch.object(_MODULE.asyncio, "sleep", new_callable=unittest.mock.AsyncMock) as sleep,
+        ):
+            await plugin._main()
+
+        self.assertEqual(sleep.await_count, 2)
+        start.assert_called_once()
+
+    async def test_stop_cancels_pending_auto_start(self) -> None:
+        plugin = _MODULE.Plugin()
+
+        async def stop_while_waiting(_seconds: float) -> None:
+            await plugin.stop_capture()
+
+        with (
+            patch.object(plugin, "_load_config", return_value=_MODULE.CaptureConfig()),
+            patch.object(plugin, "_gamescope_running", return_value=False),
+            patch.object(plugin, "_stop", return_value=True),
+            patch.object(plugin, "_start") as start,
+            patch.object(_MODULE.asyncio, "sleep", side_effect=stop_while_waiting),
+        ):
+            await plugin._main()
+
+        start.assert_not_called()
+
+    async def test_unload_cancels_pending_auto_start(self) -> None:
+        plugin = _MODULE.Plugin()
+
+        async def unload_while_waiting(_seconds: float) -> None:
+            await plugin._unload()
+
+        with (
+            patch.object(plugin, "_load_config", return_value=_MODULE.CaptureConfig()),
+            patch.object(plugin, "_gamescope_running", return_value=False),
+            patch.object(plugin, "_start") as start,
+            patch.object(_MODULE.asyncio, "sleep", side_effect=unload_while_waiting),
+        ):
+            await plugin._main()
+
+        start.assert_not_called()
+
+    async def test_disabled_auto_start_does_not_probe_gamescope(self) -> None:
+        plugin = _MODULE.Plugin()
+        with (
+            patch.object(plugin, "_load_config", return_value=_MODULE.CaptureConfig(auto_start=False)),
+            patch.object(plugin, "_gamescope_running") as gamescope,
+            patch.object(plugin, "_start") as start,
+        ):
+            await plugin._main()
+
+        gamescope.assert_not_called()
+        start.assert_not_called()
+
+    def test_manual_launch_refuses_to_run_before_gamescope(self) -> None:
+        plugin = _MODULE.Plugin()
+        with (
+            patch.object(plugin, "_ensure_installed", return_value=True),
+            patch.object(plugin, "_is_running", return_value=False),
+            patch.object(plugin, "_prepare_bwrap", return_value=True),
+            patch.object(plugin, "_load_config", return_value=_MODULE.CaptureConfig()),
+            patch.object(plugin, "_gamescope_running", return_value=False),
+            patch.object(_MODULE.subprocess, "Popen") as popen,
+        ):
+            self.assertFalse(plugin._start())
+
+        popen.assert_not_called()
+        self.assertIn("Gamescope is not running", plugin._last_error)
+
+
 if __name__ == "__main__":
     unittest.main()

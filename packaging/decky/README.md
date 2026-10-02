@@ -10,6 +10,13 @@ copies the trusted host `/usr/bin/bwrap` to the root-owned persistent directory
 `FLATPAK_BWRAP` when starting the system Flatpak. This is the mechanism used by
 Decky Sunshine to make KMS capture work from a Flatpak on SteamOS.
 
+Auto-start waits for a running `gamescope` process, and manual launches also
+require Gamescope. Stopping capture or unloading the plugin cancels a pending
+auto-start. This process check orders startup but does not prove Gamescope has
+acquired DRM master; the capture binary also immediately releases any master
+ownership implicitly granted when opening the card. An existing capture
+process still survives switches to Desktop Mode and Decky reloads.
+
 The setuid copy is recreated from the OS-owned binary before every launch and
 removed when the plugin is uninstalled. Never place it in the plugin directory:
 Decky plugin files are writable by the `deck` user, which would turn replacement

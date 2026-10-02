@@ -201,6 +201,27 @@ mod linux {
                     ))
                 })?;
             let card = Card(file);
+            // Opening a primary node implicitly grants DRM master when no
+            // compositor owns it. Release that ownership before any other
+            // initialization (including duplicating the descriptor for EGL).
+            // DROP_MASTER checks CAP_SYS_ADMIN even for non-master clients;
+            // EINVAL means this descriptor was already not the current master.
+            {
+                let _admin = EffectiveAdmin::raise().map_err(CaptureError::Unavailable)?;
+                match card.release_master_lock() {
+                    Ok(()) => tracing::warn!(
+                        device = %path.display(),
+                        "released implicitly acquired DRM master; start capture after the compositor"
+                    ),
+                    Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {}
+                    Err(error) => {
+                        return Err(CaptureError::Unavailable(format!(
+                            "cannot release DRM master on {}: {error}",
+                            path.display()
+                        )));
+                    }
+                }
+            }
             card.set_client_capability(ClientCapability::UniversalPlanes, true)
                 .map_err(|error| {
                     CaptureError::Unavailable(format!(

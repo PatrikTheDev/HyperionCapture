@@ -112,6 +112,12 @@ long-running process to follow compositor replacement such as SteamOS Game
 Mode switching to or from KDE Plasma. There is no X11, portal, or
 compositor-specific fallback.
 
+Opening a DRM primary node can implicitly grant master ownership when the
+compositor has not acquired it yet. Capture immediately issues `DROP_MASTER`
+before initializing KMS or EGL, and fails initialization if it cannot release
+ownership. It never requests master ownership. Launch it after the compositor;
+the Decky plugin waits for a Gamescope process before auto-starting.
+
 Reading framebuffer GEM handles requires `CAP_SYS_ADMIN` on current kernels.
 The backend drops it from the effective set after initialization, raises it
 only around `GETFB2`/`GETFB`, and drops it immediately afterwards. Grant the
